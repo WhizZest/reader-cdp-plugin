@@ -1,0 +1,23 @@
+{
+  "description": "微信读书专用插件",
+  "version": "1.0.0",
+  "author": "WhizZest",
+  "license": "MIT",
+  "keywords": [
+    "weread",
+    "wechat-reading",
+    "chrome-cdp",
+    "chapter-extraction",
+    "ebook"
+  ],
+  "dependencies": {
+    "chrome-cdp-skill": "https://github.com/WhizZest/chrome-cdp-skill.git"
+  },
+  "features": [
+    {
+      "script": "extract-chapter.mjs",
+      "description": "提取微信读书当前章节内容并转换为HTML文件",
+      "usage": "node extract-chapter.mjs <target> <output-path> [options]"
+    }
+  ]
+}

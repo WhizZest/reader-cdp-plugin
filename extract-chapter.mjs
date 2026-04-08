@@ -39,6 +39,11 @@ function printUsage() {
 }
 
 function parseArgs(args) {
+    if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+        printUsage();
+        process.exit(0);
+    }
+
     if (args.length < 2) {
         printUsage();
         process.exit(1);
