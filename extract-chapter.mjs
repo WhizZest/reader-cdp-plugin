@@ -83,6 +83,26 @@ function getResponseBody(target, requestId, savePath) {
     }
 }
 
+function getCurrentChapterId(target) {
+    try {
+        const url = execSync(`node "${CDP_SCRIPT}" eval ${target} "location.href"`, { encoding: 'utf8' }).trim();
+        const match = url.match(/k(\w+)$/);
+        return match ? match[1] : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function getRequestChapterId(target, requestId) {
+    try {
+        const detail = execSync(`node "${CDP_SCRIPT}" net ${target} ${requestId}`, { encoding: 'utf8' });
+        const cMatch = detail.match(/\\"c\\":\\"(\w+)\\"/);
+        return cMatch ? cMatch[1] : null;
+    } catch (error) {
+        return null;
+    }
+}
+
 function getChapterRequests(target) {
     const cmd = `node "${CDP_SCRIPT}" net ${target}`;
     try {
@@ -106,6 +126,72 @@ function getChapterRequests(target) {
         console.error(`获取章节请求失败: ${error.message}`);
         return [];
     }
+}
+
+function selectChapterGroup(chapterRequests, target, verbose) {
+    const currentChapterId = getCurrentChapterId(target);
+
+    if (verbose) {
+        console.log(`  当前URL章节ID: ${currentChapterId || '未知'}`);
+    }
+
+    const groups = {};
+    for (const req of chapterRequests) {
+        const cId = getRequestChapterId(target, req.requestId);
+        const key = cId || 'unknown';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push({ ...req, chapterId: cId });
+    }
+
+    if (verbose) {
+        console.log(`  请求分组数: ${Object.keys(groups).length}`);
+        for (const [cId, reqs] of Object.entries(groups)) {
+            console.log(`    c=${cId}: ${reqs.map(r => `e${r.fragmentType}[${r.requestId}]`).join(', ')}`);
+        }
+    }
+
+    if (currentChapterId && groups[currentChapterId]) {
+        if (verbose) {
+            console.log(`  ✓ 通过URL章节ID匹配到正文组: c=${currentChapterId}`);
+        }
+        return groups[currentChapterId];
+    }
+
+    const groupKeys = Object.keys(groups);
+    if (groupKeys.length === 1) {
+        if (verbose) {
+            console.log(`  只有一组请求，直接使用: c=${groupKeys[0]}`);
+        }
+        return groups[groupKeys[0]];
+    }
+
+    if (verbose) {
+        console.log(`  无法通过URL章节ID匹配，按响应体大小选择最大组`);
+    }
+
+    let bestGroup = null;
+    let bestLen = -1;
+    for (const [cId, reqs] of Object.entries(groups)) {
+        const e0 = reqs.find(r => r.fragmentType === '0');
+        if (e0) {
+            try {
+                const body = execSync(`node "${CDP_SCRIPT}" net ${target} ${e0.requestId} --body --raw`, { encoding: 'utf8' });
+                if (body.length > bestLen) {
+                    bestLen = body.length;
+                    bestGroup = reqs;
+                }
+            } catch (e) {}
+        }
+    }
+
+    if (bestGroup) {
+        if (verbose) {
+            console.log(`  ✓ 选择响应体最大的组 (e0长度=${bestLen})`);
+        }
+        return bestGroup;
+    }
+
+    return chapterRequests;
 }
 
 function decodeFragment(content, skip) {
@@ -163,9 +249,12 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
         });
     }
 
-    const e0Request = chapterRequests.findLast(r => r.fragmentType === '0');
-    const e1Request = chapterRequests.findLast(r => r.fragmentType === '1');
-    const e3Request = chapterRequests.findLast(r => r.fragmentType === '3');
+    console.log('\n步骤2: 识别正文请求组（排除划线等非正文内容）...');
+    const selectedRequests = selectChapterGroup(chapterRequests, target, verbose);
+
+    const e0Request = selectedRequests.findLast(r => r.fragmentType === '0');
+    const e1Request = selectedRequests.findLast(r => r.fragmentType === '1');
+    const e3Request = selectedRequests.findLast(r => r.fragmentType === '3');
 
     if (!e0Request || !e1Request || !e3Request) {
         console.error('\n错误: 缺少必要的片段请求');
@@ -182,7 +271,7 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
         process.exit(1);
     }
 
-    console.log('\n步骤2: 提取响应体片段...');
+    console.log('\n步骤3: 提取响应体片段...');
     
     let e0Path = null, e1Path = null, e3Path = null;
     let tempDir = null;
@@ -210,7 +299,7 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
     console.log('  ✓ e1片段已提取');
     console.log('  ✓ e3片段已提取');
 
-    console.log('\n步骤3: 解码片段...');
+    console.log('\n步骤4: 解码片段...');
     if (verbose) {
         console.log(`  e0文件大小: ${e0Content.length} 字节`);
         console.log(`  e1文件大小: ${e1Content.length} 字节`);
@@ -238,7 +327,7 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
     console.log(`  ✓ e1解码完成: ${e1Decoded.length} 字符`);
     console.log(`  ✓ e3解码完成: ${e3Decoded.length} 字符`);
 
-    console.log('\n步骤4: 合并为HTML文件...');
+    console.log('\n步骤5: 合并为HTML文件...');
     const fullContent = e0Decoded + e1Decoded + e3Decoded;
     const garbledCount = (fullContent.match(/\ufffd/g) || []).length;
 
