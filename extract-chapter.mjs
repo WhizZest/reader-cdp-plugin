@@ -2,7 +2,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -57,79 +57,128 @@ function parseArgs(args) {
     return { target, outputPath, keepFragments, verbose };
 }
 
-function getResponseBody(target, requestId, savePath) {
+function validateTarget(target, verbose) {
+    if (!/^[A-Za-z0-9]+$/.test(target)) {
+        if (verbose) {
+            console.error(`Invalid target format: ${target}`);
+        }
+        return false;
+    }
+    return true;
+}
+
+function validateRequestId(requestId, verbose) {
+    if (!/^\d+$/.test(requestId)) {
+        if (verbose) {
+            console.error(`Invalid requestId format: ${requestId}`);
+        }
+        return false;
+    }
+    return true;
+}
+
+function runCdp(args, verbose) {
+    try {
+        const output = execFileSync('node', [CDP_SCRIPT, ...args], { encoding: 'utf8' });
+        return { success: true, output };
+    } catch (error) {
+        if (verbose) {
+            console.error(`CDP command failed: node ${CDP_SCRIPT} ${args.join(' ')}`);
+            console.error(`Error: ${error.message}`);
+        }
+        return { success: false, output: null, error: error.message };
+    }
+}
+
+function getResponseBody(target, requestId, savePath, verbose) {
+    if (!validateRequestId(requestId, verbose)) {
+        return null;
+    }
+
+    const args = ['net', target, requestId, '--body', '--raw'];
     if (savePath) {
-        const cmd = `node "${CDP_SCRIPT}" net ${target} ${requestId} --body --raw --save "${savePath}"`;
+        args.push('--save', savePath);
+    }
+
+    const result = runCdp(args, verbose);
+    if (!result.success) {
+        return null;
+    }
+
+    if (savePath) {
         try {
-            execSync(cmd, { encoding: 'utf8', stdio: 'pipe' });
             return readFileSync(savePath, 'utf8');
         } catch (error) {
             if (verbose) {
-                console.error(`提取响应体失败: ${error.message}`);
-            }
-            return null;
-        }
-    } else {
-        const cmd = `node "${CDP_SCRIPT}" net ${target} ${requestId} --body --raw`;
-        try {
-            const output = execSync(cmd, { encoding: 'utf8' });
-            return output;
-        } catch (error) {
-            if (verbose) {
-                console.error(`提取响应体失败: ${error.message}`);
+                console.error(`Failed to read saved file: ${error.message}`);
             }
             return null;
         }
     }
+
+    return result.output;
 }
 
-function getCurrentChapterId(target) {
-    try {
-        const url = execSync(`node "${CDP_SCRIPT}" eval ${target} "location.href"`, { encoding: 'utf8' }).trim();
-        const match = url.match(/k(\w+)$/);
-        return match ? match[1] : null;
-    } catch (error) {
+const chapterIdCache = new Map();
+
+function getCurrentChapterId(target, verbose) {
+    const result = runCdp(['eval', target, 'location.href'], verbose);
+    if (!result.success) {
         return null;
     }
+
+    const url = result.output.trim();
+    const match = url.match(/k(\w+)$/);
+    return match ? match[1] : null;
 }
 
-function getRequestChapterId(target, requestId) {
-    try {
-        const detail = execSync(`node "${CDP_SCRIPT}" net ${target} ${requestId}`, { encoding: 'utf8' });
-        const cMatch = detail.match(/\\"c\\":\\"(\w+)\\"/);
-        return cMatch ? cMatch[1] : null;
-    } catch (error) {
+function getRequestChapterId(target, requestId, verbose) {
+    const cacheKey = `${target}:${requestId}`;
+    if (chapterIdCache.has(cacheKey)) {
+        return chapterIdCache.get(cacheKey);
+    }
+
+    if (!validateRequestId(requestId, verbose)) {
         return null;
     }
+
+    const result = runCdp(['net', target, requestId], verbose);
+    if (!result.success) {
+        chapterIdCache.set(cacheKey, null);
+        return null;
+    }
+
+    const cMatch = result.output.match(/\\"c\\":\\"(\w+)\\"/);
+    const chapterId = cMatch ? cMatch[1] : null;
+    chapterIdCache.set(cacheKey, chapterId);
+    return chapterId;
 }
 
-function getChapterRequests(target) {
-    const cmd = `node "${CDP_SCRIPT}" net ${target}`;
-    try {
-        const output = execSync(cmd, { encoding: 'utf8' });
-        const lines = output.split('\n');
-        const chapterRequests = [];
-
-        for (const line of lines) {
-            if (line.includes('chapter/e_')) {
-                const match = line.match(/\[(\d+)\].*chapter\/e_(\d)/);
-                if (match) {
-                    const requestId = match[1];
-                    const fragmentType = match[2];
-                    chapterRequests.push({ requestId, fragmentType });
-                }
-            }
-        }
-
-        return chapterRequests;
-    } catch (error) {
-        console.error(`获取章节请求失败: ${error.message}`);
+function getChapterRequests(target, verbose) {
+    const result = runCdp(['net', target], verbose);
+    if (!result.success) {
         return [];
     }
+
+    const lines = result.output.split('\n');
+    const chapterRequests = [];
+
+    for (const line of lines) {
+        if (line.includes('chapter/e_')) {
+            const match = line.match(/\[(\d+)\].*chapter\/e_(\d)/);
+            if (match) {
+                const requestId = match[1];
+                const fragmentType = match[2];
+                chapterRequests.push({ requestId, fragmentType });
+            }
+        }
+    }
+
+    return chapterRequests;
 }
 
 function selectChapterGroup(chapterRequests, target, verbose) {
-    const currentChapterId = getCurrentChapterId(target);
+    const currentChapterId = getCurrentChapterId(target, verbose);
 
     if (verbose) {
         console.log(`  当前URL章节ID: ${currentChapterId || '未知'}`);
@@ -137,7 +186,7 @@ function selectChapterGroup(chapterRequests, target, verbose) {
 
     const groups = {};
     for (const req of chapterRequests) {
-        const cId = getRequestChapterId(target, req.requestId);
+        const cId = getRequestChapterId(target, req.requestId, verbose);
         const key = cId || 'unknown';
         if (!groups[key]) groups[key] = [];
         groups[key].push({ ...req, chapterId: cId });
@@ -174,13 +223,11 @@ function selectChapterGroup(chapterRequests, target, verbose) {
     for (const [cId, reqs] of Object.entries(groups)) {
         const e0 = reqs.find(r => r.fragmentType === '0');
         if (e0) {
-            try {
-                const body = execSync(`node "${CDP_SCRIPT}" net ${target} ${e0.requestId} --body --raw`, { encoding: 'utf8' });
-                if (body.length > bestLen) {
-                    bestLen = body.length;
-                    bestGroup = reqs;
-                }
-            } catch (e) {}
+            const body = getResponseBody(target, e0.requestId, null, verbose);
+            if (body && body.length > bestLen) {
+                bestLen = body.length;
+                bestGroup = reqs;
+            }
         }
     }
 
@@ -225,6 +272,11 @@ function findBestSkip(content) {
 function extractChapter(target, outputPath, keepFragments, verbose) {
     console.log('=== 微信读书章节提取工具 ===\n');
 
+    if (!validateTarget(target, verbose)) {
+        console.error('错误: target 参数格式无效，只允许字母和数字');
+        process.exit(1);
+    }
+
     const outputDir = dirname(outputPath);
     if (!existsSync(outputDir)) {
         mkdirSync(outputDir, { recursive: true });
@@ -234,7 +286,7 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
     console.log(`输出文件: ${outputPath}\n`);
 
     console.log('步骤1: 获取章节请求...');
-    const chapterRequests = getChapterRequests(target);
+    const chapterRequests = getChapterRequests(target, verbose);
 
     if (chapterRequests.length === 0) {
         console.error('错误: 未找到章节请求');
@@ -286,9 +338,9 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
         e3Path = resolve(tempDir, 'e3.txt');
     }
 
-    const e0Content = getResponseBody(target, e0Request.requestId, e0Path);
-    const e1Content = getResponseBody(target, e1Request.requestId, e1Path);
-    const e3Content = getResponseBody(target, e3Request.requestId, e3Path);
+    const e0Content = getResponseBody(target, e0Request.requestId, e0Path, verbose);
+    const e1Content = getResponseBody(target, e1Request.requestId, e1Path, verbose);
+    const e3Content = getResponseBody(target, e3Request.requestId, e3Path, verbose);
 
     if (!e0Content || !e1Content || !e3Content) {
         console.error('错误: 提取响应体失败');
