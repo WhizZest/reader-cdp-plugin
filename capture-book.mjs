@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'child_process';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, appendFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,18 +9,42 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const CDP_SCRIPT = resolve(__dirname, '..', 'cdp.mjs');
 
-function runCdp(args) {
-    try { return execFileSync('node', [CDP_SCRIPT, ...args], { encoding: 'utf8' }).trim(); }
-    catch (e) { return null; }
+function runCdp(args, verbose = false) {
+    try {
+        const output = execFileSync('node', [CDP_SCRIPT, ...args], { encoding: 'utf8' });
+        return { success: true, output: output.trim(), error: null };
+    } catch (e) {
+        const error = e.stderr || e.message || 'Unknown error';
+        if (verbose) console.error(`CDP error: ${error}`);
+        return { success: false, output: null, error };
+    }
 }
 
-function evalJs(target, expr) { return runCdp(['eval', target, expr]); }
+function evalJs(target, expr) {
+    const result = runCdp(['eval', target, expr]);
+    return result.success ? result.output : null;
+}
+
+function evalJsOrThrow(target, expr, context = '') {
+    const result = runCdp(['eval', target, expr]);
+    if (!result.success) {
+        console.error(`CDP 失败${context ? ` (${context})` : ''}: ${result.error}`);
+        process.exit(1);
+    }
+    return result.output;
+}
+
 function keypress(target, key) {
     const keyCode = key === 'ArrowRight' ? 39 : key === 'ArrowLeft' ? 37 : 0;
     const code = `document.dispatchEvent(new KeyboardEvent('keydown',{key:'${key}',code:'${key}',keyCode:${keyCode},bubbles:true}))`;
     return evalJs(target, code);
 }
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function escapeJsString(str) {
+    return JSON.stringify(str);
+}
 
 function printUsage() {
     console.log(`
@@ -54,12 +78,30 @@ function parseArgs() {
         process.exit(args.includes('--help') || args.includes('-h') ? 0 : 1);
     }
     const target = args[0];
+    if (!/^[A-Za-z0-9]+$/.test(target)) {
+        console.error(`错误: target 格式无效，应为字母数字组合: ${target}`);
+        process.exit(1);
+    }
     const outputDir = resolve(args[1]);
     const opts = { target, outputDir, startUrl: '', maxPages: 500, delay: 2500 };
     for (let i = 2; i < args.length; i++) {
         if (args[i] === '--start-url' && args[i + 1]) opts.startUrl = args[++i];
-        else if (args[i] === '--max-pages' && args[i + 1]) opts.maxPages = parseInt(args[++i]);
-        else if (args[i] === '--delay' && args[i + 1]) opts.delay = parseInt(args[++i]);
+        else if (args[i] === '--max-pages' && args[i + 1]) {
+            const val = parseInt(args[++i]);
+            if (!Number.isFinite(val) || val <= 0) {
+                console.error(`错误: --max-pages 必须是正整数: ${args[i]}`);
+                process.exit(1);
+            }
+            opts.maxPages = val;
+        }
+        else if (args[i] === '--delay' && args[i + 1]) {
+            const val = parseInt(args[++i]);
+            if (!Number.isFinite(val) || val <= 0) {
+                console.error(`错误: --delay 必须是正整数: ${args[i]}`);
+                process.exit(1);
+            }
+            opts.delay = val;
+        }
     }
     if (!opts.startUrl) {
         console.error('错误: 必须提供 --start-url 参数（书籍开头的URL）');
@@ -91,7 +133,8 @@ const HOOK_CODE = `(function(){
     return 'hooked ' + document.querySelectorAll('canvas').length + ' canvases';
 })()`;
 
-const PROCESS_PAGE = `(function(){
+function buildProcessPageCode(leftC, rightC) {
+    return `(function(){
     const raw = window.__cbTexts || [];
     if (!raw.length) return JSON.stringify({left:'',right:'',summary:'',headings:[]});
 
@@ -102,8 +145,8 @@ const PROCESS_PAGE = `(function(){
         if (!seen.has(key)) { seen.add(key); deduped.push(item); }
     }
 
-    const leftC = ${0};
-    const rightC = ${1};
+    const leftC = ${leftC};
+    const rightC = ${rightC};
 
     const processCanvas = (texts, ci) => {
         const f = texts.filter(t => t.c === ci);
@@ -166,6 +209,7 @@ const PROCESS_PAGE = `(function(){
 
     return JSON.stringify({left:leftText, right:rightText, summary:summary, headings:headings});
 })()`;
+}
 
 async function captureBook(opts) {
     const { target, outputDir, startUrl, maxPages, delay } = opts;
@@ -178,22 +222,39 @@ async function captureBook(opts) {
 
     if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
 
-    let allPages = [];
+    const outputFile = resolve(outputDir, 'full-book.md');
+    if (existsSync(outputFile)) unlinkSync(outputFile);
+
     let totalChars = 0;
+    let pageCount = 0;
+
+    const appendPage = (text) => {
+        if (!text || !text.trim()) return;
+        const content = pageCount > 0 ? '\n\n---\n\n' + text : text;
+        appendFileSync(outputFile, content, 'utf8');
+        totalChars += text.length;
+        pageCount++;
+    };
 
     console.log('[1/4] 导航到书籍开头');
-    evalJs(target, `location.href = '${startUrl}'`);
+    const navCode = `location.href = ${escapeJsString(startUrl)}`;
+    const navResult = evalJs(target, navCode);
+    if (navResult === null) {
+        console.error('错误: 导航失败，CDP 连接异常');
+        process.exit(1);
+    }
     await sleep(5000);
-    const currentUrl = evalJs(target, 'location.href');
-    const currentTitle = evalJs(target, 'document.title');
+
+    const currentUrl = evalJsOrThrow(target, 'location.href', '获取当前URL');
+    const currentTitle = evalJsOrThrow(target, 'document.title', '获取页面标题');
     console.log(`  当前: ${currentTitle}`);
     console.log(`  URL: ${currentUrl}`);
 
     console.log('\n[2/4] 注入 Canvas Hook 并获取布局');
-    const canvasOrderResult = evalJs(target, `(function(){
+    const canvasOrderResult = evalJsOrThrow(target, `(function(){
         const cs = document.querySelectorAll('canvas');
         return JSON.stringify(Array.from(cs).map((c,i) => ({i, l:Math.round(c.getBoundingClientRect().left)})));
-    })()`);
+    })()`, '获取Canvas布局');
     let leftC = 0, rightC = 1;
     try {
         const co = JSON.parse(canvasOrderResult || '[]').sort((a, b) => a.l - b.l);
@@ -202,7 +263,7 @@ async function captureBook(opts) {
         console.log(`  Canvas 布局: 左=${leftC}, 右=${rightC}`);
     } catch { console.log('  Canvas 布局获取失败，使用默认值'); }
 
-    const hookResult = evalJs(target, HOOK_CODE);
+    const hookResult = evalJsOrThrow(target, HOOK_CODE, '注入Canvas Hook');
     console.log(`  Hook: ${hookResult}`);
 
     console.log('  触发首页重绘...');
@@ -210,29 +271,35 @@ async function captureBook(opts) {
     evalJs(target, 'window.dispatchEvent(new Event("resize"))');
     await sleep(2000);
 
-    const firstCount = parseInt(evalJs(target, 'window.__cbTexts ? window.__cbTexts.length : 0')) || 0;
+    const firstCountStr = evalJsOrThrow(target, 'window.__cbTexts ? window.__cbTexts.length : 0', '获取首页文本数量');
+    const firstCount = parseInt(firstCountStr) || 0;
     console.log(`  首页文本: ${firstCount} 条`);
 
-    const getTextCount = () => parseInt(evalJs(target, 'window.__cbTexts ? window.__cbTexts.length : 0')) || 0;
+    const getTextCount = () => {
+        const result = evalJs(target, 'window.__cbTexts ? window.__cbTexts.length : 0');
+        return result ? parseInt(result) || 0 : 0;
+    };
     const clearTexts = () => { evalJs(target, 'window.__cbTexts = []'); };
 
+    const processPageCode = buildProcessPageCode(leftC, rightC);
     const processPage = () => {
-        const code = PROCESS_PAGE.replace('${0}', leftC).replace('${1}', rightC);
-        const result = evalJs(target, code);
+        const result = evalJs(target, processPageCode);
+        if (result === null) return null;
         try { return JSON.parse(result || '{}'); }
         catch { return { left: '', right: '', summary: '', headings: [] }; }
     };
 
     if (firstCount > 0) {
         const firstPage = processPage();
-        const firstContent = [];
-        if (firstPage.left && firstPage.left.trim()) firstContent.push(firstPage.left);
-        if (firstPage.right && firstPage.right.trim()) firstContent.push(firstPage.right);
-        const firstText = firstContent.join('\n\n');
-        if (firstText.trim()) {
-            allPages.push(firstText);
-            totalChars += firstText.length;
-            console.log(`  首页捕获: ${firstText.length} 字符`);
+        if (firstPage) {
+            const firstContent = [];
+            if (firstPage.left && firstPage.left.trim()) firstContent.push(firstPage.left);
+            if (firstPage.right && firstPage.right.trim()) firstContent.push(firstPage.right);
+            const firstText = firstContent.join('\n\n');
+            if (firstText.trim()) {
+                appendPage(firstText);
+                console.log(`  首页捕获: ${firstText.length} 字符`);
+            }
         }
     }
 
@@ -256,6 +323,10 @@ async function captureBook(opts) {
         }
 
         const page = processPage();
+        if (page === null) {
+            console.error(`  页 ${i + 1}: CDP 失败，停止`);
+            break;
+        }
         if (!page.summary || page.summary.trim().length === 0) {
             sameCount++;
             if (sameCount >= 5) break;
@@ -279,8 +350,7 @@ async function captureBook(opts) {
         const pageText = pageContent.join('\n\n');
 
         if (pageText.trim()) {
-            allPages.push(pageText);
-            totalChars += pageText.length;
+            appendPage(pageText);
         }
 
         if ((i + 1) % 10 === 0) {
@@ -294,14 +364,13 @@ async function captureBook(opts) {
     }
 
     console.log('\n[4/4] 保存输出');
-    const fullContent = allPages.join('\n\n---\n\n');
-    const outputFile = resolve(outputDir, 'full-book.md');
-    writeFileSync(outputFile, fullContent, 'utf8');
-
-    const chineseCount = (fullContent.match(/[\u4e00-\u9fa5]/g) || []).length;
+    let chineseCount = 0;
+    if (totalChars > 0 && existsSync(outputFile)) {
+        chineseCount = (readFileSync(outputFile, 'utf8').match(/[\u4e00-\u9fa5]/g) || []).length;
+    }
     console.log(`  已保存: ${outputFile}`);
-    console.log(`  总字符: ${fullContent.length}, 中文字符: ${chineseCount}`);
-    console.log(`  总页数: ${allPages.length}`);
+    console.log(`  总字符: ${totalChars}, 中文字符: ${chineseCount}`);
+    console.log(`  总页数: ${pageCount}`);
 
     console.log('\n=== 完成 ===');
 }
