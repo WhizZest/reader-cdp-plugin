@@ -1,6 +1,6 @@
 {
-  "description": "微信读书专用插件",
-  "version": "1.0.0",
+  "description": "微信读书专用插件，提供章节提取和全书捕获功能",
+  "version": "1.1.0",
   "author": "WhizZest",
   "license": "MIT",
   "keywords": [
@@ -8,6 +8,8 @@
     "wechat-reading",
     "chrome-cdp",
     "chapter-extraction",
+    "book-capture",
+    "canvas-hook",
     "ebook"
   ],
   "dependencies": {
@@ -16,8 +18,13 @@
   "features": [
     {
       "script": "extract-chapter.mjs",
-      "description": "提取微信读书当前章节内容并转换为HTML文件",
-      "usage": "node extract-chapter.mjs <target> <output-path> [options]"
+      "description": "从网络请求中提取微信读书当前章节内容，解码后输出为HTML文件（可能含少量乱码）",
+      "usage": "node extract-chapter.mjs <target> <output-path> [--keep-fragments] [--verbose]"
+    },
+    {
+      "script": "capture-book.mjs",
+      "description": "通过Canvas fillText Hook捕获浏览器渲染文本，逐页翻页获取全书内容，输出为无乱码Markdown文件",
+      "usage": "node capture-book.mjs <target> <output-dir> --start-url <url> [--max-pages <n>] [--delay <ms>]"
     }
   ]
 }
