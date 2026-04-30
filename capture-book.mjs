@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const CDP_SCRIPT = resolve(__dirname, '..', 'cdp.mjs');
+const CDP_SCRIPT = resolve(__dirname, '..', '..', 'cdp.mjs');
 
 function runCdp(args, verbose = false) {
     try {

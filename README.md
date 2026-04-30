@@ -109,7 +109,7 @@ node capture-book.mjs --help
 
 3. **获取标签页ID**: 使用cdp工具获取标签页ID
    ```bash
-   node ../cdp.mjs list
+   node ../../cdp.mjs list
    ```
 
 **前置条件仓库**: [chrome-cdp-skill](https://github.com/WhizZest/chrome-cdp-skill.git)
@@ -160,7 +160,7 @@ node capture-book.mjs --help
 - `extract-chapter.mjs`: 章节提取脚本
 - `capture-book.mjs`: 全书捕获脚本
 - `../plugin.mjs`: 插件管理工具
-- `../cdp.mjs`: Chrome DevTools Protocol CLI工具
+- `../../cdp.mjs`: Chrome DevTools Protocol CLI工具
 
 ## 注意事项
 
