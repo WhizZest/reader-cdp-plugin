@@ -18,8 +18,8 @@
   "features": [
     {
       "script": "extract-chapter.mjs",
-      "description": "从网络请求中提取微信读书当前章节内容，解码后输出为HTML文件（可能含少量乱码）",
-      "usage": "node extract-chapter.mjs <target> <output-path> [--keep-fragments] [--verbose]"
+      "description": "通过拦截页面atob调用获取章节原始base64数据，解码后输出为完整HTML文件（0乱码）",
+      "usage": "node extract-chapter.mjs <target> <output-path> [--no-reload] [--verbose]"
     },
     {
       "script": "capture-book.mjs",

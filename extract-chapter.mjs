@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -22,19 +22,16 @@ function printUsage() {
   <output-path>  输出HTML文件的完整路径
 
 选项:
-  --keep-fragments  保留中间片段文件（e0.txt, e1.txt, e3.txt），便于调试
-  --verbose         显示详细输出
+  --no-reload    不重载页面（使用已注入的hook，需提前注入）
+  --verbose      显示详细输出
 
 示例:
   node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.html
-  node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.html --keep-fragments
   node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.html --verbose
 
 说明:
-  1. 自动提取当前章节的响应体片段（e0, e1, e3）
-  2. 解码片段（跳过固定字符数）
-  3. 合并为完整的HTML文件
-  4. 使用--keep-fragments保留片段文件，便于调试问题
+  通过拦截页面 atob 调用来获取章节原始 base64 数据，解码后得到完整 HTML。
+  默认会重载页面以触发章节重新加载，确保捕获到 atob 调用。
 `);
 }
 
@@ -51,229 +48,99 @@ function parseArgs(args) {
 
     const target = args[0];
     const outputPath = args[1];
-    const keepFragments = args.includes('--keep-fragments');
+    const noReload = args.includes('--no-reload');
     const verbose = args.includes('--verbose');
 
-    return { target, outputPath, keepFragments, verbose };
+    return { target, outputPath, noReload, verbose };
 }
 
-function validateTarget(target, verbose) {
+function validateTarget(target) {
     if (!/^[A-Za-z0-9]+$/.test(target)) {
-        if (verbose) {
-            console.error(`Invalid target format: ${target}`);
-        }
+        console.error(`Invalid target format: ${target}`);
         return false;
     }
     return true;
 }
 
-function validateRequestId(requestId, verbose) {
-    if (!/^\d+$/.test(requestId)) {
-        if (verbose) {
-            console.error(`Invalid requestId format: ${requestId}`);
-        }
-        return false;
-    }
-    return true;
-}
-
-function runCdp(args, verbose) {
+function runCdp(args) {
     try {
-        const output = execFileSync('node', [CDP_SCRIPT, ...args], { encoding: 'utf8' });
+        const output = execFileSync('node', [CDP_SCRIPT, ...args], {
+            encoding: 'utf8',
+            maxBuffer: 50 * 1024 * 1024
+        });
         return { success: true, output };
     } catch (error) {
-        if (verbose) {
-            console.error(`CDP command failed: node ${CDP_SCRIPT} ${args.join(' ')}`);
-            console.error(`Error: ${error.message}`);
-        }
         return { success: false, output: null, error: error.message };
     }
 }
 
-function getResponseBody(target, requestId, savePath, verbose) {
-    if (!validateRequestId(requestId, verbose)) {
-        return null;
-    }
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    const args = ['net', target, requestId, '--body', '--raw'];
-    if (savePath) {
-        args.push('--save', savePath);
-    }
+// 压缩为一行：通过 JSON.stringify 传给 evalraw，避免换行符导致 JSON 转义问题
+const HOOK_SOURCE = `(function(){
+window.__weread_atob_b64=[];
+var o=window.atob;
+window.atob=function(s){window.__weread_atob_b64.push(btoa(s));return o.call(window,s)};
+window.__weread_atob_hooked=true;
+})()`;
 
-    const result = runCdp(args, verbose);
+function injectHookPersistent(target, verbose) {
+    if (verbose) console.log('注入持久化 atob hook (Page.addScriptToEvaluateOnNewDocument)...');
+    const paramsJson = JSON.stringify({ source: HOOK_SOURCE });
+    const result = runCdp(['evalraw', target, 'Page.addScriptToEvaluateOnNewDocument', paramsJson]);
     if (!result.success) {
-        return null;
+        console.error('错误: 注入持久化 hook 失败');
+        console.error(result.error);
+        return false;
     }
-
-    if (savePath) {
-        try {
-            return readFileSync(savePath, 'utf8');
-        } catch (error) {
-            if (verbose) {
-                console.error(`Failed to read saved file: ${error.message}`);
-            }
-            return null;
-        }
-    }
-
-    return result.output;
+    if (verbose) console.log('  hook 已注入，将在每次页面加载时自动运行');
+    return true;
 }
 
-const chapterIdCache = new Map();
-
-function getCurrentChapterId(target, verbose) {
-    const result = runCdp(['eval', target, 'location.href'], verbose);
+function injectHookCurrent(target, verbose) {
+    if (verbose) console.log('注入当前页面 atob hook...');
+    const result = runCdp(['eval', target, HOOK_SOURCE]);
     if (!result.success) {
+        console.error('错误: 注入 hook 失败');
+        console.error(result.error);
+        return false;
+    }
+    if (verbose) console.log('  hook 状态: ' + result.output.trim());
+    return true;
+}
+
+function getHookCount(target) {
+    const result = runCdp(['eval', target, 'window.__weread_atob_b64 ? window.__weread_atob_b64.length : -1']);
+    if (!result.success) return -1;
+    return parseInt(result.output.trim());
+}
+
+function getAtobInput(target, index) {
+    const result = runCdp(['eval', target, `window.__weread_atob_b64[${index}]`]);
+    if (!result.success || !result.output) return null;
+    const b64 = result.output.trim();
+    if (!b64 || !/^[A-Za-z0-9+/=]+$/.test(b64)) return null;
+    try {
+        return Buffer.from(b64, 'base64').toString('utf8');
+    } catch (e) {
         return null;
     }
-
-    const url = result.output.trim();
-    const match = url.match(/k(\w+)$/);
-    return match ? match[1] : null;
 }
 
-function getRequestChapterId(target, requestId, verbose) {
-    const cacheKey = `${target}:${requestId}`;
-    if (chapterIdCache.has(cacheKey)) {
-        return chapterIdCache.get(cacheKey);
-    }
-
-    if (!validateRequestId(requestId, verbose)) {
-        return null;
-    }
-
-    const result = runCdp(['net', target, requestId], verbose);
-    if (!result.success) {
-        chapterIdCache.set(cacheKey, null);
-        return null;
-    }
-
-    const cMatch = result.output.match(/\\"c\\":\\"(\w+)\\"/);
-    const chapterId = cMatch ? cMatch[1] : null;
-    chapterIdCache.set(cacheKey, chapterId);
-    return chapterId;
+function getChapterTitle(target) {
+    const result = runCdp(['eval', target, `(function(){
+        var el = document.querySelector('.readerTopBar_title_link');
+        return el ? el.textContent.trim() : '';
+    })()`]);
+    return result.success ? result.output.trim() : '';
 }
 
-function getChapterRequests(target, verbose) {
-    const result = runCdp(['net', target], verbose);
-    if (!result.success) {
-        return [];
-    }
-
-    const lines = result.output.split('\n');
-    const chapterRequests = [];
-
-    for (const line of lines) {
-        if (line.includes('chapter/e_')) {
-            const match = line.match(/\[(\d+)\].*chapter\/e_(\d)/);
-            if (match) {
-                const requestId = match[1];
-                const fragmentType = match[2];
-                chapterRequests.push({ requestId, fragmentType });
-            }
-        }
-    }
-
-    return chapterRequests;
-}
-
-function selectChapterGroup(chapterRequests, target, verbose) {
-    const currentChapterId = getCurrentChapterId(target, verbose);
-
-    if (verbose) {
-        console.log(`  当前URL章节ID: ${currentChapterId || '未知'}`);
-    }
-
-    const groups = {};
-    for (const req of chapterRequests) {
-        const cId = getRequestChapterId(target, req.requestId, verbose);
-        const key = cId || 'unknown';
-        if (!groups[key]) groups[key] = [];
-        groups[key].push({ ...req, chapterId: cId });
-    }
-
-    if (verbose) {
-        console.log(`  请求分组数: ${Object.keys(groups).length}`);
-        for (const [cId, reqs] of Object.entries(groups)) {
-            console.log(`    c=${cId}: ${reqs.map(r => `e${r.fragmentType}[${r.requestId}]`).join(', ')}`);
-        }
-    }
-
-    if (currentChapterId && groups[currentChapterId]) {
-        if (verbose) {
-            console.log(`  ✓ 通过URL章节ID匹配到正文组: c=${currentChapterId}`);
-        }
-        return groups[currentChapterId];
-    }
-
-    const groupKeys = Object.keys(groups);
-    if (groupKeys.length === 1) {
-        if (verbose) {
-            console.log(`  只有一组请求，直接使用: c=${groupKeys[0]}`);
-        }
-        return groups[groupKeys[0]];
-    }
-
-    if (verbose) {
-        console.log(`  无法通过URL章节ID匹配，按响应体大小选择最大组`);
-    }
-
-    let bestGroup = null;
-    let bestLen = -1;
-    for (const [cId, reqs] of Object.entries(groups)) {
-        const e0 = reqs.find(r => r.fragmentType === '0');
-        if (e0) {
-            const body = getResponseBody(target, e0.requestId, null, verbose);
-            if (body && body.length > bestLen) {
-                bestLen = body.length;
-                bestGroup = reqs;
-            }
-        }
-    }
-
-    if (bestGroup) {
-        if (verbose) {
-            console.log(`  ✓ 选择响应体最大的组 (e0长度=${bestLen})`);
-        }
-        return bestGroup;
-    }
-
-    return chapterRequests;
-}
-
-function decodeFragment(content, skip) {
-    const b64 = content.substring(skip);
-    const bytes = Buffer.from(b64, 'base64');
-    return bytes.toString('utf8');
-}
-
-function findBestSkip(content) {
-    let bestSkip = 33;
-    let minGarbled = Infinity;
-    
-    for (let skip = 30; skip <= 35; skip++) {
-        const b64 = content.substring(skip);
-        try {
-            const bytes = Buffer.from(b64, 'base64');
-            const decoded = bytes.toString('utf8');
-            const garbled = (decoded.match(/\ufffd/g) || []).length;
-            
-            if (garbled < minGarbled) {
-                minGarbled = garbled;
-                bestSkip = skip;
-            }
-        } catch (e) {
-        }
-    }
-    
-    return bestSkip;
-}
-
-function extractChapter(target, outputPath, keepFragments, verbose) {
+async function extractChapter(target, outputPath, noReload, verbose) {
     console.log('=== 微信读书章节提取工具 ===\n');
 
-    if (!validateTarget(target, verbose)) {
-        console.error('错误: target 参数格式无效，只允许字母和数字');
+    if (!validateTarget(target)) {
         process.exit(1);
     }
 
@@ -285,132 +152,119 @@ function extractChapter(target, outputPath, keepFragments, verbose) {
     console.log(`目标标签页: ${target}`);
     console.log(`输出文件: ${outputPath}\n`);
 
-    console.log('步骤1: 获取章节请求...');
-    const chapterRequests = getChapterRequests(target, verbose);
-
-    if (chapterRequests.length === 0) {
-        console.error('错误: 未找到章节请求');
-        console.error('请确保已打开微信读书页面并加载了章节内容');
-        process.exit(1);
-    }
-
-    if (verbose) {
-        console.log('找到的章节请求:');
-        chapterRequests.forEach(req => {
-            console.log(`  - 请求ID: ${req.requestId}, 片段类型: e${req.fragmentType}`);
-        });
-    }
-
-    console.log('\n步骤2: 识别正文请求组（排除划线等非正文内容）...');
-    const selectedRequests = selectChapterGroup(chapterRequests, target, verbose);
-
-    const e0Request = selectedRequests.findLast(r => r.fragmentType === '0');
-    const e1Request = selectedRequests.findLast(r => r.fragmentType === '1');
-    const e3Request = selectedRequests.findLast(r => r.fragmentType === '3');
-
-    if (!e0Request || !e1Request || !e3Request) {
-        console.error('\n错误: 缺少必要的片段请求');
-        console.error(`  e0: ${e0Request ? '✓' : '✗'}`);
-        console.error(`  e1: ${e1Request ? '✓' : '✗'}`);
-        console.error(`  e3: ${e3Request ? '✓' : '✗'}`);
-        console.error('\n可能的原因:');
-        console.error('  1. 页面未加载章节内容');
-        console.error('  2. 网络请求缓存已清空');
-        console.error('\n解决方法:');
-        console.error('  1. 刷新微信读书页面');
-        console.error('  2. 在页面中翻页或滚动，触发章节加载');
-        console.error('  3. 等待章节内容完全加载后重新运行脚本');
-        process.exit(1);
-    }
-
-    console.log('\n步骤3: 提取响应体片段...');
-    
-    let e0Path = null, e1Path = null, e3Path = null;
-    let tempDir = null;
-    
-    if (keepFragments) {
-        tempDir = resolve(outputDir, '.temp_fragments');
-        if (!existsSync(tempDir)) {
-            mkdirSync(tempDir, { recursive: true });
+    if (!noReload) {
+        if (!injectHookPersistent(target, verbose)) {
+            process.exit(1);
         }
-        e0Path = resolve(tempDir, 'e0.txt');
-        e1Path = resolve(tempDir, 'e1.txt');
-        e3Path = resolve(tempDir, 'e3.txt');
+
+        console.log('重载页面以触发章节加载...');
+        const reloadResult = runCdp(['eval', target, 'location.reload()']);
+        if (!reloadResult.success) {
+            console.error('错误: 重载页面失败');
+            process.exit(1);
+        }
+
+        console.log('等待页面加载...');
+        await sleep(5000);
+
+        let waited = 5;
+        let timedOut = true;
+        while (waited < 30) {
+            const count = getHookCount(target);
+            if (count > 0) {
+                if (verbose) console.log(`  页面已加载，atob 记录数: ${count}`);
+                timedOut = false;
+                break;
+            }
+            await sleep(1000);
+            waited++;
+        }
+
+        if (timedOut && verbose) {
+            const hooked = runCdp(['eval', target, 'window.__weread_atob_hooked === true']);
+            console.log(`  等待超时 (${waited}s)`);
+            console.log(`  hook 已生效: ${hooked.success ? hooked.output.trim() : '无法检测'}`);
+            console.log(`  可能原因: 页面加载缓慢、网络问题、或页面未使用 atob 解码章节`);
+        }
+    } else {
+        if (!injectHookCurrent(target, verbose)) {
+            process.exit(1);
+        }
     }
 
-    const e0Content = getResponseBody(target, e0Request.requestId, e0Path, verbose);
-    const e1Content = getResponseBody(target, e1Request.requestId, e1Path, verbose);
-    const e3Content = getResponseBody(target, e3Request.requestId, e3Path, verbose);
+    const countAfter = getHookCount(target);
+    if (verbose) console.log(`atob 总记录数: ${countAfter}`);
 
-    if (!e0Content || !e1Content || !e3Content) {
-        console.error('错误: 提取响应体失败');
+    if (countAfter <= 0) {
+        console.error('错误: 未捕获到 atob 调用');
+        console.error('请确保微信读书页面已打开且章节内容可见');
         process.exit(1);
     }
 
-    console.log('  ✓ e0片段已提取');
-    console.log('  ✓ e1片段已提取');
-    console.log('  ✓ e3片段已提取');
+    console.log('搜索章节 atob 调用...');
+    let chapterInput = null;
+    let foundIndex = -1;
 
-    console.log('\n步骤4: 解码片段...');
-    if (verbose) {
-        console.log(`  e0文件大小: ${e0Content.length} 字节`);
-        console.log(`  e1文件大小: ${e1Content.length} 字节`);
-        console.log(`  e3文件大小: ${e3Content.length} 字节`);
-        console.log(`  e0前缀: ${e0Content.substring(0, 32)}`);
-        console.log(`  e1前缀: ${e1Content.substring(0, 32)}`);
-        console.log(`  e3前缀: ${e3Content.substring(0, 32)}`);
+    for (let i = countAfter - 1; i >= 0; i--) {
+        const input = getAtobInput(target, i);
+        if (input && input.length > 500 && input.startsWith('PD94bWwg')) {
+            chapterInput = input;
+            foundIndex = i;
+            break;
+        }
     }
 
-    const e0Skip = findBestSkip(e0Content);
-    const e1Skip = findBestSkip(e1Content);
-    const e3Skip = findBestSkip(e3Content);
-
-    if (verbose) {
-        console.log(`  e0最佳跳过: ${e0Skip} 字符`);
-        console.log(`  e1最佳跳过: ${e1Skip} 字符`);
-        console.log(`  e3最佳跳过: ${e3Skip} 字符`);
+    if (!chapterInput) {
+        console.error('错误: 未找到章节 atob 调用');
+        console.error('已检查的 atob 调用:');
+        for (let i = countAfter - 1; i >= 0; i--) {
+            const input = getAtobInput(target, i);
+            if (input) {
+                console.error(`  [${i}] len=${input.length} preview=${input.substring(0, 30)}`);
+            }
+        }
+        process.exit(1);
     }
 
-    const e0Decoded = decodeFragment(e0Content, e0Skip);
-    const e1Decoded = decodeFragment(e1Content, e1Skip);
-    const e3Decoded = decodeFragment(e3Content, e3Skip);
+    console.log(`  找到章节数据: index=${foundIndex}, base64长度=${chapterInput.length}`);
 
-    console.log(`  ✓ e0解码完成: ${e0Decoded.length} 字符`);
-    console.log(`  ✓ e1解码完成: ${e1Decoded.length} 字符`);
-    console.log(`  ✓ e3解码完成: ${e3Decoded.length} 字符`);
+    console.log('解码章节内容...');
+    const decoded = Buffer.from(chapterInput, 'base64');
+    const text = decoded.toString('utf8');
 
-    console.log('\n步骤5: 合并为HTML文件...');
-    const fullContent = e0Decoded + e1Decoded + e3Decoded;
-    const garbledCount = (fullContent.match(/\ufffd/g) || []).length;
+    const garbled = (text.match(/\ufffd/g) || []).length;
+    const ctrl = (text.match(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g) || []).length;
 
-    writeFileSync(outputPath, fullContent, 'utf8');
+    console.log(`  解码完成: ${decoded.length} 字节`);
+    console.log(`  乱码(\uFFFD): ${garbled}`);
+    console.log(`  控制字符: ${ctrl}`);
 
-    console.log(`  ✓ HTML文件已保存: ${outputPath}`);
-    console.log(`  ✓ 总大小: ${fullContent.length} 字符`);
-    console.log(`  ✓ 乱码数: ${garbledCount}`);
+    writeFileSync(outputPath, text, 'utf8');
 
-    if (keepFragments && tempDir) {
-        console.log(`\n片段文件已保存到: ${tempDir}`);
-        console.log('  - e0.txt');
-        console.log('  - e1.txt');
-        console.log('  - e3.txt');
-        console.log('  请手动删除临时文件');
+    const title = getChapterTitle(target);
+    if (title) {
+        console.log(`  章节标题: ${title}`);
     }
 
-    console.log('\n=== 提取完成 ===');
-    console.log(`\nHTML文件路径: ${outputPath}`);
-    console.log(`文件大小: ${fullContent.length} 字符`);
-    console.log(`乱码数量: ${garbledCount}`);
+    console.log(`\n=== 提取完成 ===`);
+    console.log(`HTML文件: ${outputPath}`);
+    console.log(`文件大小: ${text.length} 字符`);
+    console.log(`数据质量: ${garbled === 0 && ctrl === 0 ? '✅ 完美' : '⚠ 有异常字符'}`);
 
     return {
         success: true,
         outputPath,
-        size: fullContent.length,
-        garbledCount
+        size: text.length,
+        garbledCount: garbled,
+        ctrlCount: ctrl,
+        title
     };
 }
 
 const args = process.argv.slice(2);
-const { target, outputPath, keepFragments, verbose } = parseArgs(args);
+const { target, outputPath, noReload, verbose } = parseArgs(args);
 
-extractChapter(target, outputPath, keepFragments, verbose);
+extractChapter(target, outputPath, noReload, verbose).catch(e => {
+    console.error('未预期的错误:', e);
+    process.exit(1);
+});

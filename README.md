@@ -8,13 +8,13 @@
 
 ### extract-chapter - 章节提取
 
-从网络请求中提取微信读书当前章节内容，解码后输出为HTML文件。
+通过拦截页面 `atob` 调用获取章节原始 base64 数据，解码后输出为完整 HTML 文件（0 乱码）。
 
 **功能特点**：
-- 自动提取章节片段（e0, e1, e3）
-- 自动解码和合并内容
-- 支持调试模式查看中间文件
-- 智能选择最佳解码参数
+- 拦截页面 `atob` 调用，获取页面实际解码的 base64 数据
+- 保留完整 HTML 结构（图片、代码块、格式等）
+- 0 乱码、0 控制字符
+- 默认重载页面以确保捕获到 atob 调用
 
 **使用方法**：
 ```bash
@@ -27,17 +27,16 @@ node extract-chapter.mjs <target> <output-path> [options]
 
 **选项**：
 - `-h, --help`: 显示详细用法
-- `--keep-fragments`: 保留中间片段文件（e0.txt, e1.txt, e3.txt）
+- `--no-reload`: 不重载页面（需提前注入 hook）
 - `--verbose`: 显示详细输出
 
 **示例**：
 ```bash
 node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html
-node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html --keep-fragments
 node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html --verbose
 ```
 
-**注意**：解码后的HTML文件可能包含少量乱码，如需无乱码内容请使用 capture-book。
+**注意**：默认会重载页面以触发章节重新加载。如果不想重载，需提前通过其他方式注入 atob hook，然后使用 `--no-reload`。
 
 ### capture-book - 全书捕获
 
@@ -80,14 +79,14 @@ node capture-book.mjs FCE786BC D:\output\book --start-url "https://weread.qq.com
 
 | 特性 | extract-chapter | capture-book |
 |------|----------------|--------------|
-| 数据来源 | 网络请求响应体 | Canvas渲染文本 |
+| 数据来源 | 拦截页面 atob 调用 | Canvas渲染文本 |
 | 输出格式 | HTML | Markdown |
-| 乱码情况 | 可能有少量乱码 | 无乱码 |
+| 乱码情况 | 无乱码 | 无乱码 |
 | 捕获范围 | 单章节 | 全书 |
-| 速度 | 快（无需翻页） | 慢（需逐页翻页） |
-| 保留格式 | 原始HTML结构 | 标题层级+加粗 |
+| 速度 | 快（重载一次页面） | 慢（需逐页翻页） |
+| 保留格式 | 完整HTML结构 | 标题层级+加粗 |
 
-两种方案互补使用：extract-chapter 适合快速提取单章，capture-book 适合需要无乱码全文的场景。
+两种方案互补使用：extract-chapter 适合快速提取单章（保留完整 HTML），capture-book 适合需要全书纯文本的场景。
 
 ## 查看插件信息
 
@@ -118,20 +117,21 @@ node capture-book.mjs --help
 
 ### extract-chapter 技术细节
 
-#### 响应体格式
+#### atob Hook 原理
 
-微信读书的章节响应体格式：
-- 前32字符：十六进制前缀（可能用于校验）
-- 第33字符：标记字符
-- 后续内容：Base64编码的HTML内容
+微信读书在渲染章节内容时，会调用 `window.atob` 对 base64 编码的 HTML 数据进行解码。通过 `Page.addScriptToEvaluateOnNewDocument` 注入持久化 hook，拦截 `atob` 调用并捕获其输入参数。
 
-#### 解码策略
+#### 数据流程
 
-脚本会自动尝试不同的跳过字符数（30-35），选择乱码最少的解码方式。通常最佳跳过字符数为33。
+1. 注入 hook：`Page.addScriptToEvaluateOnNewDocument` 确保 hook 在每次页面加载时自动运行
+2. 重载页面：`location.reload()` 触发章节重新加载
+3. 捕获数据：hook 用 `btoa` 编码 `atob` 的输入并存入数组（避免 CDP eval 传输时的字符截断问题）
+4. 识别章节：章节数据的 base64 以 `PD94bWwg`（`<?xml`）开头
+5. 解码输出：`Buffer.from(input, 'base64')` 解码得到完整 HTML
 
-#### 乱码问题
+#### 为什么 0 乱码
 
-解码后的HTML文件可能包含少量乱码，这些乱码主要出现在HTML属性中的特殊字符和某些UTF-8编码的特殊字符，不影响正文内容的阅读。
+旧方案通过 CDP `Network.getResponseBody` 获取原始响应体，但页面 JS 在调用 `atob` 前会对响应体做额外处理（截断前缀、重排序片段），这些处理逻辑无法精确还原。新方案直接拦截 `atob` 调用，拿到页面真正解码的那份 base64 数据，从根本上消除了乱码。
 
 ### capture-book 技术细节
 
