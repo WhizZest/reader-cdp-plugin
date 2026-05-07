@@ -165,9 +165,8 @@ async function extractChapter(target, outputPath, noReload, verbose) {
         }
 
         console.log('等待页面加载...');
-        await sleep(5000);
 
-        let waited = 5;
+        let waited = 0;
         let timedOut = true;
         while (waited < 30) {
             const count = getHookCount(target);
@@ -207,7 +206,7 @@ async function extractChapter(target, outputPath, noReload, verbose) {
 
     for (let i = countAfter - 1; i >= 0; i--) {
         const input = getAtobInput(target, i);
-        if (input && input.length > 500 && input.startsWith('PD94bWwg')) {
+        if (input && input.length > 500 && input.startsWith('PD94bWwg')) { // "<?xml" 的 base64 前缀
             chapterInput = input;
             foundIndex = i;
             break;
