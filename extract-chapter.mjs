@@ -275,10 +275,10 @@ async function extractChapter(target, outputPath, noReload, markdown, verbose) {
           // turndown only treats <pre><code> as code blocks by default.
           // WeChat Read uses bare <pre> without <code> child, so we
           // add a custom rule to force fenced code block output.
-          return node.nodeName === 'PRE' && !node.querySelector('code');
+          return node.nodeName.toUpperCase() === 'PRE' && !node.querySelector('code');
         },
         replacement: function (content, node) {
-          return '\n\n```\n' + node.textContent + '\n```\n\n';
+          return '\n\n```\n' + node.textContent.trimEnd() + '\n```\n\n';
         }
       });
       outputContent = td.turndown(text);
