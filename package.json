@@ -1,0 +1,24 @@
+{
+  "name": "weread",
+  "version": "1.1.0",
+  "description": "微信读书专用插件，基于chrome-cdp-skill开发，提供微信读书相关的自动化功能。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WhizZest/reader-cdp-plugin.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/WhizZest/reader-cdp-plugin/issues"
+  },
+  "homepage": "https://github.com/WhizZest/reader-cdp-plugin#readme",
+  "dependencies": {
+    "turndown": "^7.2.4"
+  }
+}

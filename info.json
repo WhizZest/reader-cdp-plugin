@@ -18,8 +18,8 @@
   "features": [
     {
       "script": "extract-chapter.mjs",
-      "description": "通过拦截页面atob调用获取章节原始base64数据，解码后输出为完整HTML文件（0乱码）",
-      "usage": "node extract-chapter.mjs <target> <output-path> [--no-reload] [--verbose]"
+      "description": "通过拦截页面atob调用获取章节原始base64数据，解码后输出为HTML或Markdown文件",
+      "usage": "node extract-chapter.mjs <target> <output-path> [--no-reload] [--markdown] [--verbose]"
     },
     {
       "script": "capture-book.mjs",
