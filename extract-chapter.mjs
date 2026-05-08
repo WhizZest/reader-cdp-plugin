@@ -22,7 +22,7 @@ function printUsage() {
   <output-path>  输出HTML文件的完整路径
 
 选项:
-  --no-reload    不重载页面（使用已注入的hook，需提前注入）
+  --no-reload    不重载页面（直接读取已捕获的atob数据，需先不带此选项运行过一次）
   --verbose      显示详细输出
 
 示例:
@@ -80,6 +80,7 @@ function sleep(ms) {
 
 // 压缩为一行：通过 JSON.stringify 传给 evalraw，避免换行符导致 JSON 转义问题
 const HOOK_SOURCE = `(function(){
+if (window.__weread_atob_hooked) return;
 window.__weread_atob_b64=[];
 var o=window.atob;
 window.atob=function(s){window.__weread_atob_b64.push(btoa(s));return o.call(window,s)};
@@ -99,15 +100,14 @@ function injectHookPersistent(target, verbose) {
     return true;
 }
 
-function injectHookCurrent(target, verbose) {
-    if (verbose) console.log('注入当前页面 atob hook...');
-    const result = runCdp(['eval', target, HOOK_SOURCE]);
-    if (!result.success) {
-        console.error('错误: 注入 hook 失败');
-        console.error(result.error);
+function verifyHookActive(target, verbose) {
+    const result = runCdp(['eval', target, 'window.__weread_atob_hooked === true']);
+    if (!result.success || result.output.trim() !== 'true') {
+        console.error('错误: atob hook 未激活');
+        console.error('请先不带 --no-reload 运行一次以注入持久化 hook');
         return false;
     }
-    if (verbose) console.log('  hook 状态: ' + result.output.trim());
+    if (verbose) console.log('atob hook 已激活，跳过注入和重载');
     return true;
 }
 
@@ -186,7 +186,7 @@ async function extractChapter(target, outputPath, noReload, verbose) {
             console.log(`  可能原因: 页面加载缓慢、网络问题、或页面未使用 atob 解码章节`);
         }
     } else {
-        if (!injectHookCurrent(target, verbose)) {
+        if (!verifyHookActive(target, verbose)) {
             process.exit(1);
         }
     }
@@ -204,7 +204,7 @@ async function extractChapter(target, outputPath, noReload, verbose) {
     let chapterInput = null;
     let foundIndex = -1;
 
-    for (let i = countAfter - 1; i >= 0; i--) {
+    for (let i = 0; i < countAfter; i++) {
         const input = getAtobInput(target, i);
         if (input && input.length > 500 && input.startsWith('PD94bWwg')) { // "<?xml" 的 base64 前缀
             chapterInput = input;
@@ -216,7 +216,7 @@ async function extractChapter(target, outputPath, noReload, verbose) {
     if (!chapterInput) {
         console.error('错误: 未找到章节 atob 调用');
         console.error('已检查的 atob 调用:');
-        for (let i = countAfter - 1; i >= 0; i--) {
+        for (let i = 0; i < countAfter; i++) {
             const input = getAtobInput(target, i);
             if (input) {
                 console.error(`  [${i}] len=${input.length} preview=${input.substring(0, 30)}`);
