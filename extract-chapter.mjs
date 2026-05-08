@@ -4,9 +4,18 @@ import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
+
+let TurndownService = null;
+try {
+  TurndownService = require('turndown');
+} catch (e) {
+  // turndown not installed, --markdown will show install instructions
+}
 
 const CDP_SCRIPT = resolve(__dirname, '..', '..', 'cdp.mjs');
 
@@ -19,19 +28,26 @@ function printUsage() {
 
 参数:
   <target>       标签页ID（Chrome DevTools Protocol target ID）
-  <output-path>  输出HTML文件的完整路径
+  <output-path>  输出文件的完整路径
 
 选项:
   --no-reload    不重载页面（直接读取已捕获的atob数据，需先不带此选项运行过一次）
+  --markdown     输出 Markdown 格式（默认输出 HTML）
   --verbose      显示详细输出
+
+依赖:
+  本脚本依赖 turndown 库进行 HTML→Markdown 转换。
+  首次使用 --markdown 前请运行: npm install
 
 示例:
   node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.html
+  node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.md --markdown
   node extract-chapter.mjs 9AC2EE05 D:\\output\\chapter1.html --verbose
 
 说明:
   通过拦截页面 atob 调用来获取章节原始 base64 数据，解码后得到完整 HTML。
   默认会重载页面以触发章节重新加载，确保捕获到 atob 调用。
+  使用 --markdown 可将 HTML 自动转换为 Markdown 格式。
 `);
 }
 
@@ -49,9 +65,10 @@ function parseArgs(args) {
     const target = args[0];
     const outputPath = args[1];
     const noReload = args.includes('--no-reload');
+    const markdown = args.includes('--markdown');
     const verbose = args.includes('--verbose');
 
-    return { target, outputPath, noReload, verbose };
+    return { target, outputPath, noReload, markdown, verbose };
 }
 
 function validateTarget(target) {
@@ -137,7 +154,7 @@ function getChapterTitle(target) {
     return result.success ? result.output.trim() : '';
 }
 
-async function extractChapter(target, outputPath, noReload, verbose) {
+async function extractChapter(target, outputPath, noReload, markdown, verbose) {
     console.log('=== 微信读书章节提取工具 ===\n');
 
     if (!validateTarget(target)) {
@@ -238,7 +255,38 @@ async function extractChapter(target, outputPath, noReload, verbose) {
     console.log(`  乱码(\uFFFD): ${garbled}`);
     console.log(`  控制字符: ${ctrl}`);
 
-    writeFileSync(outputPath, text, 'utf8');
+    let outputContent = text;
+    let outputFormat = 'HTML';
+
+    if (markdown) {
+      if (!TurndownService) {
+        console.error('\n错误: turndown 库未安装，无法转换为 Markdown');
+        console.error('请运行: npm install');
+        process.exit(1);
+      }
+
+      console.log('转换为 Markdown...');
+      const td = new TurndownService({
+        headingStyle: 'atx',
+        codeBlockStyle: 'fenced'
+      });
+      td.addRule('preWithoutCode', {
+        filter: function (node) {
+          // turndown only treats <pre><code> as code blocks by default.
+          // WeChat Read uses bare <pre> without <code> child, so we
+          // add a custom rule to force fenced code block output.
+          return node.nodeName === 'PRE' && !node.querySelector('code');
+        },
+        replacement: function (content, node) {
+          return '\n\n```\n' + node.textContent + '\n```\n\n';
+        }
+      });
+      outputContent = td.turndown(text);
+      outputFormat = 'Markdown';
+      console.log(`  转换完成: ${outputContent.length} 字符`);
+    }
+
+    writeFileSync(outputPath, outputContent, 'utf8');
 
     const title = getChapterTitle(target);
     if (title) {
@@ -246,14 +294,16 @@ async function extractChapter(target, outputPath, noReload, verbose) {
     }
 
     console.log(`\n=== 提取完成 ===`);
-    console.log(`HTML文件: ${outputPath}`);
-    console.log(`文件大小: ${text.length} 字符`);
+    console.log(`格式: ${outputFormat}`);
+    console.log(`输出文件: ${outputPath}`);
+    console.log(`文件大小: ${outputContent.length} 字符`);
     console.log(`数据质量: ${garbled === 0 && ctrl === 0 ? '✅ 完美' : '⚠ 有异常字符'}`);
 
     return {
         success: true,
         outputPath,
-        size: text.length,
+        format: outputFormat,
+        size: outputContent.length,
         garbledCount: garbled,
         ctrlCount: ctrl,
         title
@@ -261,9 +311,9 @@ async function extractChapter(target, outputPath, noReload, verbose) {
 }
 
 const args = process.argv.slice(2);
-const { target, outputPath, noReload, verbose } = parseArgs(args);
+const { target, outputPath, noReload, markdown, verbose } = parseArgs(args);
 
-extractChapter(target, outputPath, noReload, verbose).catch(e => {
+extractChapter(target, outputPath, noReload, markdown, verbose).catch(e => {
     console.error('未预期的错误:', e);
     process.exit(1);
 });
