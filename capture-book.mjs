@@ -82,7 +82,7 @@ function extractBookId(target) {
   const urlResult = runCdp(['eval', target, 'location.href']);
   if (urlResult.success) {
     const url = urlResult.output;
-    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}32[0-9a-f]{2}|$)/);
+    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}32[0-9a-f]{2}|[?#]|$)/);
     if (m) return m[1];
   }
 
@@ -298,8 +298,12 @@ async function captureBook(opts) {
     if (!existsSync(chapterFile)) continue;
 
     let content = readFileSync(chapterFile, 'utf8');
-    appendFileSync(fullBookFile, `## ${chapter.title}\n\n`, 'utf8');
-    appendFileSync(fullBookFile, content, 'utf8');
+    if (/^#/.test(content)) {
+      appendFileSync(fullBookFile, content, 'utf8');
+    } else {
+      appendFileSync(fullBookFile, `## ${chapter.title}\n\n`, 'utf8');
+      appendFileSync(fullBookFile, content, 'utf8');
+    }
     appendFileSync(fullBookFile, '\n\n', 'utf8');
   }
 
