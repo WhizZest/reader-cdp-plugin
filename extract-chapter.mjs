@@ -31,7 +31,7 @@ function printUsage() {
   <output-path>  输出文件的完整路径
 
 选项:
-  --no-reload    不重载页面（直接读取已捕获的atob数据，需先不带此选项运行过一次）
+  --no-reload    不重载页面，等待已注入的 Hook 捕获数据后直接提取
   --markdown     输出 Markdown 格式（默认输出 HTML）
   --verbose      显示详细输出
 
@@ -48,6 +48,10 @@ function printUsage() {
   通过拦截页面 atob 调用来获取章节原始 base64 数据，解码后得到完整 HTML。
   默认会重载页面以触发章节重新加载，确保捕获到 atob 调用。
   使用 --markdown 可将 HTML 自动转换为 Markdown 格式。
+
+注意事项:
+  仅能提取当前账户已购买/可阅读的章节内容。
+  未购买章节可能返回不完整或空内容，请确保已在微信读书中打开目标章节。
 `);
 }
 
@@ -154,6 +158,29 @@ function getChapterTitle(target) {
     return result.success ? result.output.trim() : '';
 }
 
+async function waitForAtobData(target, verbose) {
+    let waited = 0;
+    while (waited < 30) {
+        const count = getHookCount(target);
+        if (count > 0) {
+            if (verbose) console.log(`  atob 数据已就绪，记录数: ${count}`);
+            return;
+        }
+        await sleep(1000);
+        waited++;
+    }
+
+    if (verbose) {
+        const hooked = runCdp(['eval', target, 'window.__weread_atob_hooked === true']);
+        console.log(`  等待超时 (${waited}s)`);
+        console.log(`  hook 已生效: ${hooked.success ? hooked.output.trim() : '无法检测'}`);
+        console.log(`  可能原因: 页面加载缓慢、网络问题、或页面未使用 atob 解码章节`);
+    }
+    console.error('错误: 等待 atob 数据超时 (30s)');
+    console.error('请确保章节内容已加载且页面可见');
+    process.exit(1);
+}
+
 async function extractChapter(target, outputPath, noReload, markdown, verbose) {
     console.log('=== 微信读书章节提取工具 ===\n');
 
@@ -182,40 +209,17 @@ async function extractChapter(target, outputPath, noReload, markdown, verbose) {
         }
 
         console.log('等待页面加载...');
-
-        let waited = 0;
-        let timedOut = true;
-        while (waited < 30) {
-            const count = getHookCount(target);
-            if (count > 0) {
-                if (verbose) console.log(`  页面已加载，atob 记录数: ${count}`);
-                timedOut = false;
-                break;
-            }
-            await sleep(1000);
-            waited++;
-        }
-
-        if (timedOut && verbose) {
-            const hooked = runCdp(['eval', target, 'window.__weread_atob_hooked === true']);
-            console.log(`  等待超时 (${waited}s)`);
-            console.log(`  hook 已生效: ${hooked.success ? hooked.output.trim() : '无法检测'}`);
-            console.log(`  可能原因: 页面加载缓慢、网络问题、或页面未使用 atob 解码章节`);
-        }
+        await waitForAtobData(target, verbose);
     } else {
         if (!verifyHookActive(target, verbose)) {
             process.exit(1);
         }
+        console.log('等待 atob 数据就绪...');
+        await waitForAtobData(target, verbose);
     }
 
     const countAfter = getHookCount(target);
     if (verbose) console.log(`atob 总记录数: ${countAfter}`);
-
-    if (countAfter <= 0) {
-        console.error('错误: 未捕获到 atob 调用');
-        console.error('请确保微信读书页面已打开且章节内容可见');
-        process.exit(1);
-    }
 
     console.log('搜索章节 atob 调用...');
     let chapterInput = null;
