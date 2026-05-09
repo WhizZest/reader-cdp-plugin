@@ -1,6 +1,6 @@
 {
   "description": "微信读书专用插件，提供章节提取和全书捕获功能",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": "WhizZest",
   "license": "MIT",
   "keywords": [
@@ -9,7 +9,7 @@
     "chrome-cdp",
     "chapter-extraction",
     "book-capture",
-    "canvas-hook",
+    "atob-hook",
     "ebook"
   ],
   "dependencies": {
@@ -23,8 +23,8 @@
     },
     {
       "script": "capture-book.mjs",
-      "description": "通过Canvas fillText Hook捕获浏览器渲染文本，逐页翻页获取全书内容，输出为无乱码Markdown文件",
-      "usage": "node capture-book.mjs <target> <output-dir> --start-url <url> [--max-pages <n>] [--delay <ms>]"
+      "description": "通过atob Hook + 章节URL跳转方案获取全书内容，自动获取章节目录并逐章提取，输出为Markdown文件",
+      "usage": "node capture-book.mjs <target> <output-dir> [--book-id <id>] [--max-chapters <n>] [--delay <ms>] [--verbose]"
     }
   ]
 }

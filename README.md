@@ -28,11 +28,13 @@ node extract-chapter.mjs <target> <output-path> [options]
 **选项**：
 - `-h, --help`: 显示详细用法
 - `--no-reload`: 不重载页面（需提前注入 hook）
+- `--markdown`: 输出 Markdown 格式（默认输出 HTML）
 - `--verbose`: 显示详细输出
 
 **示例**：
 ```bash
 node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html
+node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.md --markdown
 node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html --verbose
 ```
 
@@ -40,18 +42,19 @@ node extract-chapter.mjs 9AC2EE05 D:\output\chapter1.html --verbose
 
 ### capture-book - 全书捕获
 
-通过Canvas fillText Hook捕获浏览器渲染文本，逐页翻页获取全书内容，输出为无乱码Markdown文件。
+通过 atob Hook + 章节 URL 跳转方案获取全书内容。自动获取章节目录，按章节顺序跳转并逐章提取，输出为 Markdown 文件。
 
 **功能特点**：
-- Canvas fillText Hook捕获渲染后文本，天然无乱码
-- 自动识别标题层级（h1-h4）和加粗文本
-- 支持左右双Canvas布局
-- 内容去重和重复页检测
-- 自动检测书末（"已读完"）
+- atob Hook 拦截章节原始 HTML，保留完整结构（图片、代码块等）
+- 自动从当前页面提取 book_id，或手动指定
+- 自动获取章节目录，按章节 URL 跳转
+- 断点续传：已提取的章节自动跳过
+- 章节间随机延迟，避免触发反爬
+- 合并输出全书 Markdown（标题层级自动调整）
 
 **使用方法**：
 ```bash
-node capture-book.mjs <target> <output-dir> --start-url <url> [options]
+node capture-book.mjs <target> <output-dir> [options]
 ```
 
 **参数**：
@@ -60,33 +63,30 @@ node capture-book.mjs <target> <output-dir> --start-url <url> [options]
 
 **选项**：
 - `-h, --help`: 显示详细用法
-- `--start-url <url>`: 书籍开头的URL（必填）
-- `--max-pages <n>`: 最多翻n页（默认500）
-- `--delay <ms>`: 翻页间隔毫秒数（默认2500）
+- `--book-id <id>`: 书籍 ID（如 b0132ec0813abb496g019430），不提供则从当前页面 URL 自动提取
+- `--max-chapters <n>`: 最多提取 n 章（默认全部）
+- `--delay <ms>`: 章节间延迟毫秒数（默认 2000）
+- `--verbose`: 显示详细输出
 
 **示例**：
 ```bash
-node capture-book.mjs FCE786BC D:\output\book --start-url "https://weread.qq.com/web/reader/b0132ec0813abb496g019430kc0c320a0232c0c7c76d365a"
-node capture-book.mjs FCE786BC D:\output\book --start-url "https://weread.qq.com/web/reader/b0132ec0813abb496g019430kc0c320a0232c0c7c76d365a" --max-pages 100 --delay 1500
+node capture-book.mjs FCE786BC D:\output\book
+node capture-book.mjs FCE786BC D:\output\book --book-id b0132ec0813abb496g019430
+node capture-book.mjs FCE786BC D:\output\book --max-chapters 10 --delay 3000 --verbose
 ```
-
-**获取书籍开头URL**：
-1. 在微信读书中打开目标书籍
-2. 跳转到书籍开头（第一页）
-3. 复制浏览器地址栏中的URL作为 `--start-url` 参数
 
 ## 两种方案对比
 
 | 特性 | extract-chapter | capture-book |
 |------|----------------|--------------|
-| 数据来源 | 拦截页面 atob 调用 | Canvas渲染文本 |
-| 输出格式 | HTML | Markdown |
+| 数据来源 | 拦截页面 atob 调用 | 拦截页面 atob 调用 |
+| 输出格式 | HTML / Markdown | Markdown |
 | 乱码情况 | 无乱码 | 无乱码 |
 | 捕获范围 | 单章节 | 全书 |
-| 速度 | 快（重载一次页面） | 慢（需逐页翻页） |
-| 保留格式 | 完整HTML结构 | 标题层级+加粗 |
+| 速度 | 快（重载一次页面） | 较慢（需逐章跳转） |
+| 保留格式 | 完整 HTML 结构 | 完整 Markdown（图片、代码块等） |
 
-两种方案互补使用：extract-chapter 适合快速提取单章（保留完整 HTML），capture-book 适合需要全书纯文本的场景。
+两种方案互补使用：extract-chapter 适合快速提取单章，capture-book 适合批量获取全书。
 
 ## 查看插件信息
 
@@ -135,24 +135,30 @@ node capture-book.mjs --help
 
 ### capture-book 技术细节
 
-#### Canvas Hook原理
+#### atob Hook + 章节 URL 跳转
 
-微信读书使用Canvas渲染书籍内容（文字保护措施）。通过Hook `CanvasRenderingContext2D.prototype.fillText` 方法，捕获每次渲染的文本及其坐标信息。
+与 `extract-chapter` 共用同一套 atob Hook 机制（`lib/atob-extract.mjs`），拦截 `window.atob` 调用获取章节原始 HTML。区别在于 capture-book 自动遍历全书所有章节。
 
-#### 文本处理流程
+#### 数据流程
 
-1. **去重**：基于文本+坐标+Canvas索引的唯一键去重
-2. **排序**：按Y坐标分行，行内按X坐标排序
-3. **分类**：根据字体大小和粗细识别标题层级（h1-h4）和加粗文本
-4. **格式化**：转换为Markdown格式
+1. 获取 book_id：从当前页面 URL 自动提取，或通过 `--book-id` 手动指定
+2. 获取章节目录：CDP eval 执行 `fetch()` 获取书籍主页 HTML，括号计数法提取 `__INITIAL_STATE__` 中的 `chapterInfos`
+3. 注入 Hook：`Page.addScriptToEvaluateOnNewDocument` 注入持久化 atob Hook
+4. 逐章跳转：通过 `wr_hash(chapterUid)` 算法生成章节 URL，`cdp nav` 跳转
+5. 提取内容：等待 atob 数据就绪 → 识别 `PD94bWwg` 前缀的章节记录 → base64 解码 → turndown 转 Markdown
+6. 合并输出：以 `# 书名` 开头，各章标题降一级（`headingLevelShift: +1`），拼接为 `full-book.md`
 
-#### 翻页机制
+#### wr_hash 算法
 
-使用CDP的 `Input.dispatchKeyEvent` 发送键盘事件（ArrowRight），模拟用户翻页操作。每次翻页后等待渲染完成再捕获内容。
+章节 URL 格式为 `https://weread.qq.com/web/reader/{book_id}k{wr_hash(chapterUid)}`。`wr_hash` 基于 MD5 和分段十六进制编码，实现在 `lib/wr-hash.mjs`。
 
-#### 章节编码
+#### 断点续传
 
-微信读书URL中的章节编码是加密的，无法从chapterUid直接推导。因此需要用户提供书籍开头的URL作为起点。
+每章独立输出文件 `<序号>-<chapterUid>.md`，提取前检查文件是否已存在且非空，存在则跳过。中断后重新运行自动从断点继续。
+
+#### 反爬措施
+
+章节间添加随机延迟（默认 2000ms ±20%），避免固定间隔被识别为机器行为。
 
 ## 相关文件
 
@@ -190,22 +196,31 @@ node capture-book.mjs --help
 2. 重新加载章节内容
 3. 重新运行脚本
 
-### capture-book 首页内容为空
+### capture-book book_id 提取失败
 
-**原因**: resize事件未触发Canvas重绘
-
-**解决**:
-1. 检查页面是否完全加载
-2. 增加导航后的等待时间
-3. 手动在页面上操作触发重绘后重新运行
-
-### capture-book 翻页后无内容
-
-**原因**: 翻页间隔太短，页面未渲染完成
+**原因**: 当前页面不是微信读书的书籍阅读页或书籍详情页
 
 **解决**:
-1. 增加 `--delay` 参数值（如3000）
-2. 检查网络连接是否正常
+1. 在浏览器中打开目标书籍的任意章节
+2. 或使用 `--book-id` 手动指定书籍 ID
+3. 书架页面无法自动提取 book_id，必须使用 `--book-id`
+
+### capture-book 章节提取超时
+
+**原因**: atob 数据在 30 秒内未就绪，可能是网络慢或页面加载异常
+
+**解决**:
+1. 检查网络连接是否正常
+2. 增加 `--delay` 参数值（如 3000）
+3. 重新运行脚本（已提取的章节会自动跳过）
+
+### 未登录微信读书
+
+**原因**: 浏览器中微信读书未登录或登录已过期
+
+**解决**:
+1. 在浏览器中打开微信读书并登录
+2. 登录后重新运行脚本
 
 ## 许可证
 

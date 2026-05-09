@@ -1,57 +1,20 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'child_process';
-import { writeFileSync, appendFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { writeFileSync, appendFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from 'fs';
+import { resolve, join } from 'path';
+import { injectHook, waitForData, extractChapterData, runCdp } from './lib/atob-extract.mjs';
+import { buildChapterUrl } from './lib/wr-hash.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const CDP_SCRIPT = resolve(__dirname, '..', '..', 'cdp.mjs');
-
-function runCdp(args, verbose = false) {
-    try {
-        const output = execFileSync('node', [CDP_SCRIPT, ...args], { encoding: 'utf8' });
-        return { success: true, output: output.trim(), error: null };
-    } catch (e) {
-        const error = e.stderr || e.message || 'Unknown error';
-        if (verbose) console.error(`CDP error: ${error}`);
-        return { success: false, output: null, error };
-    }
-}
-
-function evalJs(target, expr) {
-    const result = runCdp(['eval', target, expr]);
-    return result.success ? result.output : null;
-}
-
-function evalJsOrThrow(target, expr, context = '') {
-    const result = runCdp(['eval', target, expr]);
-    if (!result.success) {
-        console.error(`CDP 失败${context ? ` (${context})` : ''}: ${result.error}`);
-        process.exit(1);
-    }
-    return result.output;
-}
-
-function keypress(target, key) {
-    const keyCode = key === 'ArrowRight' ? 39 : key === 'ArrowLeft' ? 37 : 0;
-    const code = `document.dispatchEvent(new KeyboardEvent('keydown',{key:'${key}',code:'${key}',keyCode:${keyCode},bubbles:true}))`;
-    return evalJs(target, code);
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function escapeJsString(str) {
-    return JSON.stringify(str);
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function printUsage() {
-    console.log(`
-微信读书全书捕获工具（Canvas Hook 方案）
+  console.log(`
+微信读书全书捕获工具（atob Hook + 章节 URL 跳转方案）
 
-通过 Canvas fillText Hook 捕获浏览器渲染后的文本，逐页翻页获取全书内容。
-输出为 Markdown 格式，天然无乱码。
+通过 atob Hook 拦截章节原始 HTML，按章节 URL 跳转获取全书内容。
+输出为 Markdown 格式，保留完整 HTML 结构（图片、代码块等）。
 
 用法:
   node capture-book.mjs <target> <output-dir> [options]
@@ -61,319 +24,298 @@ function printUsage() {
   <output-dir>   输出目录路径
 
 选项:
-  --start-url <url>   书籍开头的URL（必填，从该URL开始向后翻页）
-  --max-pages <n>     最多翻n页（默认500）
-  --delay <ms>        翻页间隔毫秒数（默认2500）
+  --book-id <id>      书籍 ID（如 b0132ec0813abb496g019430）
+                       若不提供，将从当前页面 URL 自动提取
+  --max-chapters <n>  最多提取 n 章（默认全部）
+  --delay <ms>        章节间延迟毫秒数（默认 2000，避免触发反爬）
+  --verbose           显示详细输出
 
 示例:
-  node capture-book.mjs FCE786BC D:\\output\\book --start-url "https://weread.qq.com/web/reader/b0132ec0813abb496g019430kc0c320a0232c0c7c76d365a"
-  node capture-book.mjs FCE786BC D:\\output\\book --start-url "https://weread.qq.com/web/reader/b0132ec0813abb496g019430kc0c320a0232c0c7c76d365a" --max-pages 100 --delay 1500
+  node capture-book.mjs FCE786BC D:\\output --book-id b0132ec0813abb496g019430
+  node capture-book.mjs FCE786BC D:\\output
+  node capture-book.mjs FCE786BC D:\\output --book-id b0132ec0813abb496g019430 --delay 3000 --max-chapters 10
 `);
 }
 
 function parseArgs() {
-    const args = process.argv.slice(2);
-    if (args.length < 2 || args.includes('--help') || args.includes('-h')) {
-        printUsage();
-        process.exit(args.includes('--help') || args.includes('-h') ? 0 : 1);
-    }
-    const target = args[0];
-    if (!/^[A-Za-z0-9]+$/.test(target)) {
-        console.error(`错误: target 格式无效，应为字母数字组合: ${target}`);
+  const args = process.argv.slice(2);
+  if (args.length < 2 || args.includes('--help') || args.includes('-h')) {
+    printUsage();
+    process.exit(args.includes('--help') || args.includes('-h') ? 0 : 1);
+  }
+
+  const target = args[0];
+  if (!/^[A-Za-z0-9]+$/.test(target)) {
+    console.error(`错误: target 格式无效: ${target}`);
+    process.exit(1);
+  }
+
+  const outputDir = resolve(args[1]);
+  const opts = { target, outputDir, bookId: null, maxChapters: 0, delay: 2000, verbose: false };
+
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === '--book-id' && args[i + 1]) {
+      opts.bookId = args[++i];
+    } else if (args[i] === '--max-chapters' && args[i + 1]) {
+      const val = parseInt(args[++i]);
+      if (!Number.isFinite(val) || val <= 0) {
+        console.error(`错误: --max-chapters 必须是正整数: ${args[i]}`);
         process.exit(1);
-    }
-    const outputDir = resolve(args[1]);
-    const opts = { target, outputDir, startUrl: '', maxPages: 500, delay: 2500 };
-    for (let i = 2; i < args.length; i++) {
-        if (args[i] === '--start-url' && args[i + 1]) opts.startUrl = args[++i];
-        else if (args[i] === '--max-pages' && args[i + 1]) {
-            const val = parseInt(args[++i]);
-            if (!Number.isFinite(val) || val <= 0) {
-                console.error(`错误: --max-pages 必须是正整数: ${args[i]}`);
-                process.exit(1);
-            }
-            opts.maxPages = val;
-        }
-        else if (args[i] === '--delay' && args[i + 1]) {
-            const val = parseInt(args[++i]);
-            if (!Number.isFinite(val) || val <= 0) {
-                console.error(`错误: --delay 必须是正整数: ${args[i]}`);
-                process.exit(1);
-            }
-            opts.delay = val;
-        }
-    }
-    if (!opts.startUrl) {
-        console.error('错误: 必须提供 --start-url 参数（书籍开头的URL）');
+      }
+      opts.maxChapters = val;
+    } else if (args[i] === '--delay' && args[i + 1]) {
+      const val = parseInt(args[++i]);
+      if (!Number.isFinite(val) || val <= 0) {
+        console.error(`错误: --delay 必须是正整数: ${args[i]}`);
         process.exit(1);
+      }
+      opts.delay = val;
+    } else if (args[i] === '--verbose') {
+      opts.verbose = true;
     }
-    return opts;
+  }
+
+  return opts;
 }
 
-const HOOK_CODE = `(function(){
-    window.__cbTexts = [];
-    window.__cbMap = new WeakMap();
-    document.querySelectorAll('canvas').forEach((c, i) => window.__cbMap.set(c, i));
-    const orig = CanvasRenderingContext2D.prototype.fillText.__orig ||
-                 CanvasRenderingContext2D.prototype.fillText;
-    CanvasRenderingContext2D.prototype.fillText = function(text, x, y, mw) {
-        if (text && text.length > 0) {
-            const ci = window.__cbMap.has(this.canvas) ? window.__cbMap.get(this.canvas) : -1;
-            window.__cbTexts.push({
-                t: text,
-                x: Math.round(x * 10) / 10,
-                y: Math.round(y * 10) / 10,
-                c: ci,
-                f: this.font || ''
-            });
-        }
-        return orig.apply(this, arguments);
-    };
-    CanvasRenderingContext2D.prototype.fillText.__orig = orig;
-    return 'hooked ' + document.querySelectorAll('canvas').length + ' canvases';
-})()`;
+function extractBookId(target) {
+  const urlResult = runCdp(['eval', target, 'location.href']);
+  if (urlResult.success) {
+    const url = urlResult.output;
+    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}32[0-9a-f]{2}|[?#]|$)/);
+    if (m) return m[1];
+  }
 
-function buildProcessPageCode(leftC, rightC) {
-    return `(function(){
-    const raw = window.__cbTexts || [];
-    if (!raw.length) return JSON.stringify({left:'',right:'',summary:'',headings:[]});
+  const htmlResult = runCdp(['eval', target, 'document.documentElement.innerHTML']);
+  if (htmlResult.success) {
+    try {
+      const data = extractInitialState(htmlResult.output);
+      const bookId = data.reader?.bookInfo?.bookId || data.book?.bookId;
+      if (bookId) return bookId;
+    } catch (e) {}
+  }
 
-    const seen = new Set();
-    const deduped = [];
-    for (const item of raw) {
-        const key = item.t + '|' + item.x + '|' + item.y + '|' + item.c;
-        if (!seen.has(key)) { seen.add(key); deduped.push(item); }
+  console.error('错误: 无法从当前页面提取 book_id');
+  console.error('  请确保已打开微信读书的某本书，或使用 --book-id 手动指定');
+  process.exit(1);
+}
+
+function extractInitialState(html) {
+  const start = html.indexOf('window.__INITIAL_STATE__=');
+  if (start === -1) {
+    throw new Error('未找到 __INITIAL_STATE__');
+  }
+  const jsonStart = start + 'window.__INITIAL_STATE__='.length;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = jsonStart; i < html.length; i++) {
+    const c = html[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') depth++;
+    if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0) {
+        return JSON.parse(html.substring(jsonStart, i + 1));
+      }
     }
+  }
+  throw new Error('__INITIAL_STATE__ JSON 未闭合');
+}
 
-    const leftC = ${leftC};
-    const rightC = ${rightC};
+function getChapterList(target, bookId, verbose) {
+  console.log('获取章节目录...');
 
-    const processCanvas = (texts, ci) => {
-        const f = texts.filter(t => t.c === ci);
-        if (!f.length) return [];
-        const s = [...f].sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
-        const lines = [];
-        let cur = null;
-        for (const t of s) {
-            if (!cur || Math.abs(t.y - cur.y) > 3) {
-                if (cur) { cur.text = cur.parts.sort((a,b) => a.x - b.x).map(p => p.text).join(''); lines.push(cur); }
-                cur = { y: t.y, parts: [{ text: t.t, x: t.x, font: t.f }] };
-            } else {
-                cur.parts.push({ text: t.t, x: t.x, font: t.f });
-            }
-        }
-        if (cur) { cur.text = cur.parts.sort((a,b) => a.x - b.x).map(p => p.text).join(''); lines.push(cur); }
-        return lines;
-    };
+  const script = `fetch('https://weread.qq.com/web/bookDetail/${bookId}').then(r => r.text())`;
+  const result = runCdp(['eval', target, script]);
+  if (!result.success) {
+    console.error('错误: 获取书籍主页失败');
+    console.error(result.error);
+    process.exit(1);
+  }
 
-    const getFontInfo = (font) => {
-        const m = font && font.match(/(\\d+(?:\\.\\d+)?)px/);
-        return { size: m ? parseFloat(m[1]) : 0, bold: /bold/i.test(font || '') };
-    };
+  let data;
+  try {
+    data = extractInitialState(result.output);
+  } catch (e) {
+    console.error('错误: 解析书籍信息失败: ' + e.message);
+    process.exit(1);
+  }
 
-    const classifyLine = (line) => {
-        const avg = line.parts.reduce((s, p) => s + getFontInfo(p.font).size, 0) / line.parts.length;
-        const bold = line.parts.some(p => getFontInfo(p.font).bold);
-        const text = line.text.trim();
-        if (!text) return 'empty';
-        if (avg >= 26) return 'h1';
-        if (avg >= 23) return 'h2';
-        if (avg >= 20) return 'h3';
-        if (avg >= 17 && bold) return 'h4';
-        if (bold) return 'bold';
-        return 'normal';
-    };
+  const chapterInfos = data.reader?.chapterInfos;
+  if (!chapterInfos || !Array.isArray(chapterInfos) || chapterInfos.length === 0) {
+    console.error('错误: 未找到章节目录');
+    process.exit(1);
+  }
 
-    const formatLine = (line) => {
-        const type = classifyLine(line);
-        const text = line.text.trim();
-        if (!text) return '';
-        switch (type) {
-            case 'h1': return '# ' + text;
-            case 'h2': return '## ' + text;
-            case 'h3': return '### ' + text;
-            case 'h4': return '#### ' + text;
-            case 'bold': return '**' + text + '**';
-            default: return text;
-        }
-    };
+  const bookTitle = data.reader?.bookInfo?.title || data.book?.title || '';
 
-    const leftLines = processCanvas(deduped, leftC);
-    const rightLines = processCanvas(deduped, rightC);
-    const leftText = leftLines.map(formatLine).filter(l => l).join('\\n\\n');
-    const rightText = rightLines.map(formatLine).filter(l => l).join('\\n\\n');
-    const summary = (leftLines.map(l => l.text).join(' ') + ' ' + rightLines.map(l => l.text).join(' ')).trim();
-    const headings = [];
-    for (const l of leftLines) { const t = classifyLine(l); if (t === 'h1' || t === 'h2') headings.push({type:t, text:l.text.trim()}); }
-    for (const l of rightLines) { const t = classifyLine(l); if (t === 'h1' || t === 'h2') headings.push({type:t, text:l.text.trim()}); }
+  const chapters = chapterInfos.map(c => ({
+    uid: c.chapterUid,
+    title: c.title || '',
+    level: c.level || 0,
+    url: buildChapterUrl(bookId, c.chapterUid)
+  }));
 
-    return JSON.stringify({left:leftText, right:rightText, summary:summary, headings:headings});
-})()`;
+  console.log(`  书名: ${bookTitle}`);
+  console.log(`  章节数: ${chapters.length}`);
+  if (verbose) {
+    chapters.slice(0, 5).forEach((c, i) => {
+      console.log(`  [${i + 1}] ${c.title} (uid=${c.uid})`);
+    });
+    if (chapters.length > 5) console.log(`  ... 共 ${chapters.length} 章`);
+  }
+
+  return { bookTitle, chapters };
+}
+
+function padNum(n, width) {
+  return String(n).padStart(width, '0');
+}
+
+function checkLoginState(target) {
+  const result = runCdp(['eval', target,
+    `(function(){
+      var m = document.cookie.match(/wr_localvid=([^;]+)/);
+      return m ? (m[1].trim().length > 0 ? '1' : '0') : '0';
+    })()`
+  ]);
+  if (!result.success) {
+    console.error('错误: CDP 通信异常，无法检测登录状态');
+    console.error('  请检查 Chrome 远程调试是否已启动（--remote-debugging-port=9222）');
+    process.exit(1);
+  }
+  return result.output.trim() === '1';
 }
 
 async function captureBook(opts) {
-    const { target, outputDir, startUrl, maxPages, delay } = opts;
+  const { target, outputDir, bookId: inputBookId, maxChapters, delay, verbose } = opts;
 
-    console.log('=== 微信读书全书捕获 ===\n');
-    console.log(`目标: ${target}`);
-    console.log(`输出: ${outputDir}`);
-    console.log(`起始URL: ${startUrl}`);
-    console.log(`最大页数: ${maxPages}, 翻页间隔: ${delay}ms\n`);
+  console.log('=== 微信读书全书捕获 ===\n');
+  console.log(`目标: ${target}`);
+  console.log(`输出: ${outputDir}`);
 
-    if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+  const bookId = inputBookId || extractBookId(target);
+  console.log(`书籍ID: ${bookId}`);
 
-    const outputFile = resolve(outputDir, 'full-book.md');
-    if (existsSync(outputFile)) unlinkSync(outputFile);
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
+  }
 
-    let totalChars = 0;
-    let pageCount = 0;
+  const chaptersDir = join(outputDir, 'chapters');
+  if (!existsSync(chaptersDir)) {
+    mkdirSync(chaptersDir, { recursive: true });
+  }
 
-    const appendPage = (text) => {
-        if (!text || !text.trim()) return;
-        const content = pageCount > 0 ? '\n\n---\n\n' + text : text;
-        appendFileSync(outputFile, content, 'utf8');
-        totalChars += text.length;
-        pageCount++;
-    };
+  const { bookTitle, chapters } = getChapterList(target, bookId, verbose);
 
-    console.log('[1/4] 导航到书籍开头');
-    const navCode = `location.href = ${escapeJsString(startUrl)}`;
-    const navResult = evalJs(target, navCode);
-    if (navResult === null) {
-        console.error('错误: 导航失败，CDP 连接异常');
-        process.exit(1);
+  if (!checkLoginState(target)) {
+    console.error('\n错误: 未登录微信读书');
+    console.error('  请先在浏览器中登录微信读书后再运行本脚本');
+    process.exit(1);
+  }
+
+  const effectiveChapters = maxChapters > 0 ? chapters.slice(0, maxChapters) : chapters;
+  const totalChapters = effectiveChapters.length;
+  const padWidth = String(totalChapters).length;
+
+  console.log(`\n开始逐章提取 (共 ${totalChapters} 章)...\n`);
+
+  console.log('[1/2] 注入 atob Hook...');
+  if (!injectHook(target, verbose)) {
+    console.error('错误: Hook 注入失败');
+    process.exit(1);
+  }
+
+  let successCount = 0;
+  let skipCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < totalChapters; i++) {
+    const chapter = effectiveChapters[i];
+    const seq = padNum(i + 1, padWidth);
+    const chapterFile = join(chaptersDir, `${seq}-${chapter.uid}.md`);
+
+    if (existsSync(chapterFile) && readFileSync(chapterFile, 'utf8').trim().length > 0) {
+      console.log(`[${i + 1}/${totalChapters}] ${chapter.title} - 已存在，跳过`);
+      skipCount++;
+      continue;
     }
-    await sleep(5000);
 
-    const currentUrl = evalJsOrThrow(target, 'location.href', '获取当前URL');
-    const currentTitle = evalJsOrThrow(target, 'document.title', '获取页面标题');
-    console.log(`  当前: ${currentTitle}`);
-    console.log(`  URL: ${currentUrl}`);
+    console.log(`[${i + 1}/${totalChapters}] ${chapter.title}`);
 
-    console.log('\n[2/4] 注入 Canvas Hook 并获取布局');
-    const canvasOrderResult = evalJsOrThrow(target, `(function(){
-        const cs = document.querySelectorAll('canvas');
-        return JSON.stringify(Array.from(cs).map((c,i) => ({i, l:Math.round(c.getBoundingClientRect().left)})));
-    })()`, '获取Canvas布局');
-    let leftC = 0, rightC = 1;
     try {
-        const co = JSON.parse(canvasOrderResult || '[]').sort((a, b) => a.l - b.l);
-        leftC = co[0]?.i ?? 0;
-        rightC = co[1]?.i ?? 1;
-        console.log(`  Canvas 布局: 左=${leftC}, 右=${rightC}`);
-    } catch { console.log('  Canvas 布局获取失败，使用默认值'); }
+      if (verbose) console.log(`  导航: ${chapter.url}`);
+      const navResult = runCdp(['nav', target, chapter.url]);
+      if (!navResult.success) {
+        console.error(`  错误: 导航失败 - ${navResult.error}`);
+        failCount++;
+        continue;
+      }
 
-    const hookResult = evalJsOrThrow(target, HOOK_CODE, '注入Canvas Hook');
-    console.log(`  Hook: ${hookResult}`);
+      await waitForData(target, 30, verbose);
 
-    console.log('  触发首页重绘...');
-    evalJs(target, 'window.__cbTexts = []');
-    evalJs(target, 'window.dispatchEvent(new Event("resize"))');
-    await sleep(2000);
+      const data = extractChapterData(target, { markdown: true, verbose, headingLevelShift: 1 });
+      writeFileSync(chapterFile, data.markdown, 'utf8');
 
-    const firstCountStr = evalJsOrThrow(target, 'window.__cbTexts ? window.__cbTexts.length : 0', '获取首页文本数量');
-    const firstCount = parseInt(firstCountStr) || 0;
-    console.log(`  首页文本: ${firstCount} 条`);
+      const quality = data.garbled === 0 && data.ctrl === 0 ? '✅' : '⚠';
+      console.log(`  ${quality} ${data.markdown.length} 字符`);
+      successCount++;
 
-    const getTextCount = () => {
-        const result = evalJs(target, 'window.__cbTexts ? window.__cbTexts.length : 0');
-        return result ? parseInt(result) || 0 : 0;
-    };
-    const clearTexts = () => { evalJs(target, 'window.__cbTexts = []'); };
-
-    const processPageCode = buildProcessPageCode(leftC, rightC);
-    const processPage = () => {
-        const result = evalJs(target, processPageCode);
-        if (result === null) return null;
-        try { return JSON.parse(result || '{}'); }
-        catch { return { left: '', right: '', summary: '', headings: [] }; }
-    };
-
-    if (firstCount > 0) {
-        const firstPage = processPage();
-        if (firstPage) {
-            const firstContent = [];
-            if (firstPage.left && firstPage.left.trim()) firstContent.push(firstPage.left);
-            if (firstPage.right && firstPage.right.trim()) firstContent.push(firstPage.right);
-            const firstText = firstContent.join('\n\n');
-            if (firstText.trim()) {
-                appendPage(firstText);
-                console.log(`  首页捕获: ${firstText.length} 字符`);
-            }
-        }
+    } catch (e) {
+      console.error(`  错误: ${e.message}`);
+      failCount++;
     }
 
-    console.log('\n[3/4] 逐页向后捕获全书内容');
-    let sameCount = 0;
-    let lastSummary = '';
-
-    for (let i = 0; i < maxPages; i++) {
-        clearTexts();
-        keypress(target, 'ArrowRight');
-        await sleep(delay);
-
-        const count = getTextCount();
-        if (count === 0) {
-            sameCount++;
-            if (sameCount >= 5) {
-                console.log(`  页 ${i + 1}: 连续5页无内容，停止`);
-                break;
-            }
-            continue;
-        }
-
-        const page = processPage();
-        if (page === null) {
-            console.error(`  页 ${i + 1}: CDP 失败，停止`);
-            break;
-        }
-        if (!page.summary || page.summary.trim().length === 0) {
-            sameCount++;
-            if (sameCount >= 5) break;
-            continue;
-        }
-
-        if (page.summary === lastSummary) {
-            sameCount++;
-            if (sameCount >= 3) {
-                console.log(`  页 ${i + 1}: 连续3页内容相同，停止`);
-                break;
-            }
-            continue;
-        }
-        sameCount = 0;
-        lastSummary = page.summary;
-
-        const pageContent = [];
-        if (page.left && page.left.trim()) pageContent.push(page.left);
-        if (page.right && page.right.trim()) pageContent.push(page.right);
-        const pageText = pageContent.join('\n\n');
-
-        if (pageText.trim()) {
-            appendPage(pageText);
-        }
-
-        if ((i + 1) % 10 === 0) {
-            console.log(`  已捕获 ${i + 1} 页, ${totalChars} 字符`);
-        }
-
-        if (page.summary.includes('已读完') || page.summary.includes('已 读 完')) {
-            console.log(`  页 ${i + 1}: 到达书末`);
-            break;
-        }
+    if (i < totalChapters - 1) {
+      const jitterRange = Math.floor(delay * 0.2);
+      const randomJitter = Math.floor(Math.random() * jitterRange * 2) - jitterRange;
+      const waitMs = delay + randomJitter;
+      if (verbose) console.log(`  等待 ${waitMs}ms...`);
+      await sleep(waitMs);
     }
+  }
 
-    console.log('\n[4/4] 保存输出');
-    let chineseCount = 0;
-    if (totalChars > 0 && existsSync(outputFile)) {
-        chineseCount = (readFileSync(outputFile, 'utf8').match(/[\u4e00-\u9fa5]/g) || []).length;
+  console.log(`\n[2/2] 合并输出...`);
+  const fullBookFile = join(outputDir, 'full-book.md');
+
+  if (existsSync(fullBookFile)) {
+    unlinkSync(fullBookFile);
+  }
+
+  if (bookTitle) {
+    writeFileSync(fullBookFile, `# ${bookTitle}\n\n`, 'utf8');
+  } else {
+    writeFileSync(fullBookFile, '', 'utf8');
+  }
+
+  for (let i = 0; i < totalChapters; i++) {
+    const chapter = effectiveChapters[i];
+    const seq = padNum(i + 1, padWidth);
+    const chapterFile = join(chaptersDir, `${seq}-${chapter.uid}.md`);
+
+    if (!existsSync(chapterFile)) continue;
+
+    let content = readFileSync(chapterFile, 'utf8');
+    if (/^#/.test(content)) {
+      appendFileSync(fullBookFile, content, 'utf8');
+    } else {
+      appendFileSync(fullBookFile, `## ${chapter.title}\n\n`, 'utf8');
+      appendFileSync(fullBookFile, content, 'utf8');
     }
-    console.log(`  已保存: ${outputFile}`);
-    console.log(`  总字符: ${totalChars}, 中文字符: ${chineseCount}`);
-    console.log(`  总页数: ${pageCount}`);
+    appendFileSync(fullBookFile, '\n\n', 'utf8');
+  }
 
-    console.log('\n=== 完成 ===');
+  console.log(`\n=== 捕获完成 ===`);
+  console.log(`成功: ${successCount} 章`);
+  if (skipCount > 0) console.log(`跳过: ${skipCount} 章（已存在）`);
+  if (failCount > 0) console.log(`失败: ${failCount} 章`);
+  console.log(`输出: ${fullBookFile}`);
 }
 
 const opts = parseArgs();
-captureBook(opts);
+captureBook(opts).catch(e => {
+  console.error('未预期的错误:', e);
+  process.exit(1);
+});
