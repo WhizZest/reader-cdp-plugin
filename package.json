@@ -1,6 +1,6 @@
 {
   "name": "weread",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "微信读书专用插件，基于chrome-cdp-skill开发，提供微信读书相关的自动化功能。",
   "main": "index.js",
   "scripts": {
