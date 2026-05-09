@@ -214,6 +214,7 @@ async function extractChapter(target, outputPath, noReload, markdown, verbose) {
         if (!verifyHookActive(target, verbose)) {
             process.exit(1);
         }
+        console.log('等待 atob 数据就绪...');
         await waitForAtobData(target, verbose);
     }
 
