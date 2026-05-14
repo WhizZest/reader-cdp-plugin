@@ -75,18 +75,79 @@ node capture-book.mjs FCE786BC D:\output\book --book-id b0132ec0813abb496g019430
 node capture-book.mjs FCE786BC D:\output\book --max-chapters 10 --delay 3000 --verbose
 ```
 
-## 两种方案对比
+### list-chapters - 章节目录列表
 
-| 特性 | extract-chapter | capture-book |
-|------|----------------|--------------|
-| 数据来源 | 拦截页面 atob 调用 | 拦截页面 atob 调用 |
-| 输出格式 | HTML / Markdown | Markdown |
-| 乱码情况 | 无乱码 | 无乱码 |
-| 捕获范围 | 单章节 | 全书 |
-| 速度 | 快（重载一次页面） | 较慢（需逐章跳转） |
-| 保留格式 | 完整 HTML 结构 | 完整 Markdown（图片、代码块等） |
+列出当前书籍的完整章节目录，包含章节标题和 UID。
 
-两种方案互补使用：extract-chapter 适合快速提取单章，capture-book 适合批量获取全书。
+**功能特点**：
+- 通过 CDP eval 执行 fetch 获取书籍主页数据
+- 解析 `__INITIAL_STATE__` 提取章节目录
+- 支持表格和 JSON 两种输出格式
+- 轻量快速，无需重载页面
+
+**使用方法**：
+```bash
+node list-chapters.mjs <target> [options]
+```
+
+**参数**：
+- `<target>`: Chrome DevTools Protocol 标签页ID（需在微信读书书籍页面运行）
+
+**选项**：
+- `-h, --help`: 显示详细用法
+- `--book-id <id>`: 书籍 ID，不提供则从当前页面 URL 自动提取
+- `--json`: 输出 JSON 格式（默认表格）
+- `--verbose`: 显示详细输出
+
+**示例**：
+```bash
+node list-chapters.mjs 483DB8D1
+node list-chapters.mjs 483DB8D1 --book-id b0132ec0813abb496g019430
+node list-chapters.mjs 483DB8D1 --json
+```
+
+### navigate-chapter - 章节导航
+
+通过 chapterUid 直接跳转到指定章节。
+
+**功能特点**：
+- 使用 `wr_hash` 算法自动构造章节 URL
+- 底层 CDP nav 自动等待页面加载完成
+- 导航后验证是否成功跳转到预期地址
+- 超时自动输出诊断信息
+
+**使用方法**：
+```bash
+node navigate-chapter.mjs <target> <chapterUid> [options]
+```
+
+**参数**：
+- `<target>`: Chrome DevTools Protocol 标签页ID（需在微信读书书籍页面运行）
+- `<chapterUid>`: 章节 UID（数字或字符串）
+
+**选项**：
+- `-h, --help`: 显示详细用法
+- `--book-id <id>`: 书籍 ID，不提供则从当前页面 URL 自动提取
+- `--verbose`: 显示详细输出
+
+**示例**：
+```bash
+node navigate-chapter.mjs 483DB8D1 50
+node navigate-chapter.mjs 483DB8D1 50 --book-id b0132ec0813abb496g019430
+```
+
+## 四种方案对比
+
+| 特性 | extract-chapter | capture-book | list-chapters | navigate-chapter |
+|------|----------------|--------------|---------------|------------------|
+| 数据来源 | 拦截页面 atob 调用 | 拦截页面 atob 调用 | CDP eval fetch | CDP nav |
+| 输出格式 | HTML / Markdown | Markdown | 表格 / JSON | 导航结果 |
+| 乱码情况 | 无乱码 | 无乱码 | N/A | N/A |
+| 捕获范围 | 单章节 | 全书 | 目录信息 | 单章跳转 |
+| 速度 | 快（重载一次页面） | 较慢（需逐章跳转） | 快（一次 fetch） | 快（一次导航） |
+| 保留格式 | 完整 HTML 结构 | 完整 Markdown（图片、代码块等） | N/A | N/A |
+
+四种命令互补使用：extract-chapter 适合快速提取单章，capture-book 适合批量获取全书，list-chapters 适合浏览目录，navigate-chapter 适合手动跳转章节。
 
 ## 查看插件信息
 
@@ -95,6 +156,8 @@ node ../plugin.mjs --help
 node ../plugin.mjs weread
 node extract-chapter.mjs --help
 node capture-book.mjs --help
+node list-chapters.mjs --help
+node navigate-chapter.mjs --help
 ```
 
 ## 前置条件
@@ -165,6 +228,11 @@ node capture-book.mjs --help
 - `info.json`: 插件元数据
 - `extract-chapter.mjs`: 章节提取脚本
 - `capture-book.mjs`: 全书捕获脚本
+- `list-chapters.mjs`: 章节目录列表脚本
+- `navigate-chapter.mjs`: 章节导航脚本
+- `lib/atob-extract.mjs`: atob Hook 和 CDP 工具函数
+- `lib/wr-hash.mjs`: wr_hash 算法和章节 URL 构造
+- `lib/book-info.mjs`: 书籍信息获取（bookId 提取、章节目录）
 - `../plugin.mjs`: 插件管理工具
 - `../../cdp.mjs`: Chrome DevTools Protocol CLI工具
 
