@@ -4,7 +4,7 @@
   "description": "微信读书专用插件，基于chrome-cdp-skill开发，提供微信读书相关的自动化功能。",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test lib/wr-hash.test.mjs"
   },
   "repository": {
     "type": "git",
