@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { extractBookId, getChapterList } from './lib/book-info.mjs';
+import { extractBookId, getChapterList, normalizeBookId } from './lib/book-info.mjs';
 
 function printUsage() {
   console.log(`
@@ -16,8 +16,9 @@ function printUsage() {
                  需在微信读书书籍页面运行
 
 选项:
-  --book-id <id>  书籍 ID（如 b0132ec0813abb496g019430）
-                   若不提供，将从当前页面 URL 自动提取
+  --book-id <id>  书籍 ID（支持两种格式）
+                   encodeId: b0132ec0813abb496g019430
+                   纯数字:   3300199909
   --json          输出 JSON 格式（默认表格）
   --verbose       显示详细输出
 
@@ -83,7 +84,7 @@ function main() {
   const { target, json, verbose, bookId: inputBookId } = opts;
 
   try {
-    const bookId = inputBookId || extractBookId(target);
+    const bookId = inputBookId ? normalizeBookId(inputBookId) : extractBookId(target);
     if (verbose) console.log(`bookId: ${bookId} (来源: ${inputBookId ? '参数' : '页面提取'})`);
 
     const { bookTitle, chapters } = getChapterList(target, bookId);
