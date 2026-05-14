@@ -112,7 +112,7 @@ async function captureBook(opts) {
       console.error('错误: ' + e.message);
       process.exit(1);
     }
-  })();
+  })());
   console.log(`书籍ID: ${bookId}`);
 
   if (!existsSync(outputDir)) {
