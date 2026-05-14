@@ -78,7 +78,7 @@ function main() {
     }
 
     const urlCheck = runCdp(['eval', target, 'location.href']);
-    if (urlCheck.success && urlCheck.output.includes('weread.qq.com/web/reader')) {
+    if (urlCheck.success && urlCheck.output.includes(url)) {
       console.log(`导航成功: ${url}`);
     } else {
       console.error('导航可能失败：页面未跳转到预期地址');
