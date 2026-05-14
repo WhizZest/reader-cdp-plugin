@@ -84,7 +84,7 @@ function main() {
   const { target, json, verbose, bookId: inputBookId } = opts;
 
   try {
-    const bookId = inputBookId ? normalizeBookId(inputBookId) : extractBookId(target);
+    const bookId = normalizeBookId(inputBookId || extractBookId(target));
     if (verbose) console.log(`bookId: ${bookId} (来源: ${inputBookId ? '参数' : '页面提取'})`);
 
     const { bookTitle, chapters } = getChapterList(target, bookId);

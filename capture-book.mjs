@@ -105,7 +105,7 @@ async function captureBook(opts) {
   console.log(`目标: ${target}`);
   console.log(`输出: ${outputDir}`);
 
-  const bookId = inputBookId ? normalizeBookId(inputBookId) : (() => {
+  const bookId = normalizeBookId(inputBookId || (() => {
     try {
       return extractBookId(target);
     } catch (e) {
