@@ -3,7 +3,7 @@
 import { writeFileSync, appendFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from 'fs';
 import { resolve, join } from 'path';
 import { injectHook, waitForData, extractChapterData, runCdp } from './lib/atob-extract.mjs';
-import { extractBookId, getChapterList } from './lib/book-info.mjs';
+import { extractBookId, getChapterList, normalizeBookId } from './lib/book-info.mjs';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -24,8 +24,9 @@ function printUsage() {
   <output-dir>   输出目录路径
 
 选项:
-  --book-id <id>      书籍 ID（如 b0132ec0813abb496g019430）
-                       若不提供，将从当前页面 URL 自动提取
+  --book-id <id>      书籍 ID（支持两种格式）
+                       encodeId: b0132ec0813abb496g019430
+                       纯数字:   3300199909
   --max-chapters <n>  最多提取 n 章（默认全部）
   --delay <ms>        章节间延迟毫秒数（默认 2000，避免触发反爬）
   --verbose           显示详细输出
@@ -104,7 +105,7 @@ async function captureBook(opts) {
   console.log(`目标: ${target}`);
   console.log(`输出: ${outputDir}`);
 
-  const bookId = inputBookId || (() => {
+  const bookId = normalizeBookId(inputBookId || (() => {
     try {
       return extractBookId(target);
     } catch (e) {

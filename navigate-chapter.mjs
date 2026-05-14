@@ -2,7 +2,7 @@
 
 import { runCdp } from './lib/atob-extract.mjs';
 import { buildChapterUrl } from './lib/wr-hash.mjs';
-import { extractBookId } from './lib/book-info.mjs';
+import { extractBookId, normalizeBookId } from './lib/book-info.mjs';
 
 function printUsage() {
   console.log(`
@@ -19,8 +19,9 @@ function printUsage() {
   <chapterUid>   章节 UID（数字或字符串）
 
 选项:
-  --book-id <id>  书籍 ID（如 b0132ec0813abb496g019430）
-                   若不提供，将从当前页面 URL 自动提取
+  --book-id <id>  书籍 ID（支持两种格式）
+                   encodeId: b0132ec0813abb496g019430
+                   纯数字:   3300199909
   --verbose       显示详细输出
 
 示例:
@@ -65,7 +66,7 @@ function main() {
   const { target, chapterUid, verbose, bookId: inputBookId } = opts;
 
   try {
-    const bookId = inputBookId || extractBookId(target);
+    const bookId = normalizeBookId(inputBookId || extractBookId(target));
     if (verbose) console.log(`bookId: ${bookId} (来源: ${inputBookId ? '参数' : '页面提取'})`);
 
     const url = buildChapterUrl(bookId, chapterUid);
