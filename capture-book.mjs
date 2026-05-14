@@ -82,7 +82,7 @@ function extractBookId(target) {
   const urlResult = runCdp(['eval', target, 'location.href']);
   if (urlResult.success) {
     const url = urlResult.output;
-    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}32[0-9a-f]{2}|[?#]|$)/);
+    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}[34]2[0-9a-f]{2}|[?#]|$)/);
     if (m) return m[1];
   }
 
