@@ -3,7 +3,7 @@
 import { writeFileSync, appendFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from 'fs';
 import { resolve, join } from 'path';
 import { injectHook, waitForData, extractChapterData, runCdp } from './lib/atob-extract.mjs';
-import { buildChapterUrl } from './lib/wr-hash.mjs';
+import { extractBookId, getChapterList } from './lib/book-info.mjs';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -78,98 +78,6 @@ function parseArgs() {
   return opts;
 }
 
-function extractBookId(target) {
-  const urlResult = runCdp(['eval', target, 'location.href']);
-  if (urlResult.success) {
-    const url = urlResult.output;
-    const m = url.match(/(?:reader|bookDetail)\/([a-zA-Z0-9]+?)(?:k[0-9a-f]{3}[34]2[0-9a-f]{2}|[?#]|$)/);
-    if (m) return m[1];
-  }
-
-  const htmlResult = runCdp(['eval', target, 'document.documentElement.innerHTML']);
-  if (htmlResult.success) {
-    try {
-      const data = extractInitialState(htmlResult.output);
-      const bookId = data.reader?.bookInfo?.bookId || data.book?.bookId;
-      if (bookId) return bookId;
-    } catch (e) {}
-  }
-
-  console.error('错误: 无法从当前页面提取 book_id');
-  console.error('  请确保已打开微信读书的某本书，或使用 --book-id 手动指定');
-  process.exit(1);
-}
-
-function extractInitialState(html) {
-  const start = html.indexOf('window.__INITIAL_STATE__=');
-  if (start === -1) {
-    throw new Error('未找到 __INITIAL_STATE__');
-  }
-  const jsonStart = start + 'window.__INITIAL_STATE__='.length;
-  let depth = 0, inStr = false, esc = false;
-  for (let i = jsonStart; i < html.length; i++) {
-    const c = html[i];
-    if (esc) { esc = false; continue; }
-    if (c === '\\') { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (c === '{' || c === '[') depth++;
-    if (c === '}' || c === ']') {
-      depth--;
-      if (depth === 0) {
-        return JSON.parse(html.substring(jsonStart, i + 1));
-      }
-    }
-  }
-  throw new Error('__INITIAL_STATE__ JSON 未闭合');
-}
-
-function getChapterList(target, bookId, verbose) {
-  console.log('获取章节目录...');
-
-  const script = `fetch('https://weread.qq.com/web/bookDetail/${bookId}').then(r => r.text())`;
-  const result = runCdp(['eval', target, script]);
-  if (!result.success) {
-    console.error('错误: 获取书籍主页失败');
-    console.error(result.error);
-    process.exit(1);
-  }
-
-  let data;
-  try {
-    data = extractInitialState(result.output);
-  } catch (e) {
-    console.error('错误: 解析书籍信息失败: ' + e.message);
-    process.exit(1);
-  }
-
-  const chapterInfos = data.reader?.chapterInfos;
-  if (!chapterInfos || !Array.isArray(chapterInfos) || chapterInfos.length === 0) {
-    console.error('错误: 未找到章节目录');
-    process.exit(1);
-  }
-
-  const bookTitle = data.reader?.bookInfo?.title || data.book?.title || '';
-
-  const chapters = chapterInfos.map(c => ({
-    uid: c.chapterUid,
-    title: c.title || '',
-    level: c.level || 0,
-    url: buildChapterUrl(bookId, c.chapterUid)
-  }));
-
-  console.log(`  书名: ${bookTitle}`);
-  console.log(`  章节数: ${chapters.length}`);
-  if (verbose) {
-    chapters.slice(0, 5).forEach((c, i) => {
-      console.log(`  [${i + 1}] ${c.title} (uid=${c.uid})`);
-    });
-    if (chapters.length > 5) console.log(`  ... 共 ${chapters.length} 章`);
-  }
-
-  return { bookTitle, chapters };
-}
-
 function padNum(n, width) {
   return String(n).padStart(width, '0');
 }
@@ -196,7 +104,14 @@ async function captureBook(opts) {
   console.log(`目标: ${target}`);
   console.log(`输出: ${outputDir}`);
 
-  const bookId = inputBookId || extractBookId(target);
+  const bookId = inputBookId || (() => {
+    try {
+      return extractBookId(target);
+    } catch (e) {
+      console.error('错误: ' + e.message);
+      process.exit(1);
+    }
+  })();
   console.log(`书籍ID: ${bookId}`);
 
   if (!existsSync(outputDir)) {
@@ -208,7 +123,24 @@ async function captureBook(opts) {
     mkdirSync(chaptersDir, { recursive: true });
   }
 
-  const { bookTitle, chapters } = getChapterList(target, bookId, verbose);
+  console.log('获取章节目录...');
+  let bookTitle, chapters;
+  try {
+    const result = getChapterList(target, bookId);
+    bookTitle = result.bookTitle;
+    chapters = result.chapters;
+  } catch (e) {
+    console.error('错误: ' + e.message);
+    process.exit(1);
+  }
+  console.log(`  书名: ${bookTitle}`);
+  console.log(`  章节数: ${chapters.length}`);
+  if (verbose) {
+    chapters.slice(0, 5).forEach((c, i) => {
+      console.log(`  [${i + 1}] ${c.title} (uid=${c.uid})`);
+    });
+    if (chapters.length > 5) console.log(`  ... 共 ${chapters.length} 章`);
+  }
 
   if (!checkLoginState(target)) {
     console.error('\n错误: 未登录微信读书');
