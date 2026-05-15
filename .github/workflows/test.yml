@@ -15,3 +15,4 @@ jobs:
         with:
           node-version: 18
       - run: npm test
+      - run: npm run test:offline
