@@ -94,7 +94,7 @@ function printOutline(bookTitle, outlines, chapterTitleMap) {
     const items = outline.items;
     for (let i = 1; i < items.length; i++) {
       const item = items[i];
-      const level = item.level - 1;
+      const level = Math.max(1, item.level - 1);
       while (counters.length < level) counters.push(0);
       counters.length = level;
       counters[level - 1]++;
@@ -118,7 +118,7 @@ function formatToMarkdown(bookTitle, outlines, chapterTitleMap) {
     const items = outline.items;
     for (let i = 1; i < items.length; i++) {
       const item = items[i];
-      const level = item.level - 1;
+      const level = Math.max(1, item.level - 1);
       while (counters.length < level) counters.push(0);
       counters.length = level;
       counters[level - 1]++;
