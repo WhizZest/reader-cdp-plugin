@@ -93,8 +93,9 @@ function printOutline(bookTitle, outlines, chapterTitleMap) {
     const counters = [];
     for (const item of outline.items) {
       const level = item.level;
+      while (counters.length < level) counters.push(0);
       counters.length = level;
-      counters[level - 1] = (counters[level - 1] || 0) + 1;
+      counters[level - 1]++;
       const number = counters.join('.');
       const indent = '  '.repeat(level - 1);
       console.log(`${indent}${number}. ${item.text}`);
