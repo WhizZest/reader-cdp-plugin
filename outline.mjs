@@ -90,9 +90,15 @@ function printOutline(bookTitle, outlines, chapterTitleMap) {
     const title = chapterTitleMap.get(outline.chapterUid) || `章节 ${outline.chapterUid}`;
     console.log(`--- ${title} ---`);
 
+    const counters = [];
     for (const item of outline.items) {
-      const indent = '  '.repeat(item.level - 1);
-      console.log(`${indent}${item.level}. ${item.text}`);
+      const level = item.level;
+      while (counters.length < level) counters.push(0);
+      counters.length = level;
+      counters[level - 1]++;
+      const number = counters.join('.');
+      const indent = '  '.repeat(level - 1);
+      console.log(`${indent}${number}. ${item.text}`);
     }
     console.log('');
   }
