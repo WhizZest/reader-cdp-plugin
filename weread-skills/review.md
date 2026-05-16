@@ -41,18 +41,18 @@
 | `reviews` | 点评数组 |
 | `reviews[].idx` | 序号（用于翻页，下次 maxIdx 传最后一条的 idx） |
 | `reviews[].review.reviewId` | 点评唯一 ID |
-| `reviews[].review.review.content` | 点评文本内容 |
-| `reviews[].review.review.htmlContent` | 点评 HTML 内容（富文本） |
-| `reviews[].review.review.star` | 评分（20=一星, 40=二星, 60=三星, 80=四星, 100=五星） |
-| `reviews[].review.review.isFinish` | 是否读完此书 |
-| `reviews[].review.review.createTime` | 创建时间 |
-| `reviews[].review.review.chapterName` | 所在章节名（章节点评时有值） |
-| `reviews[].review.review.author.userVid` | 评论者 vid |
-| `reviews[].review.review.author.name` | 评论者昵称 |
-| `reviews[].review.review.author.avatar` | 评论者头像 |
-| `reviews[].review.review.book.bookId` | 书籍 ID |
-| `reviews[].review.review.book.title` | 书名 |
-| `reviews[].review.review.book.author` | 书籍作者 |
+| `reviews[].review.content` | 点评文本内容 |
+| `reviews[].review.htmlContent` | 点评 HTML 内容（富文本） |
+| `reviews[].review.star` | 评分（20=一星, 40=二星, 60=三星, 80=四星, 100=五星） |
+| `reviews[].review.isFinish` | 是否读完此书 |
+| `reviews[].review.createTime` | 创建时间 |
+| `reviews[].review.chapterName` | 所在章节名（章节点评时有值） |
+| `reviews[].review.author.userVid` | 评论者 vid |
+| `reviews[].review.author.name` | 评论者昵称 |
+| `reviews[].review.author.avatar` | 评论者头像 |
+| `reviews[].review.book.bookId` | 书籍 ID |
+| `reviews[].review.book.title` | 书名 |
+| `reviews[].review.book.author` | 书籍作者 |
 
 ## 工作流
 

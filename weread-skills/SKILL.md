@@ -20,11 +20,6 @@ version: 1.0.3
 | 章节热门划线 | 查看书籍/章节热门划线、划线热度及划线下想法 | "看看这章有什么热门划线" "这段话下面有什么想法" | `notes.md` |
 | 书籍点评 | 查看书籍的公开点评 | "三体这本书有什么点评？" "看看推荐的点评" | `review.md` |
 | 推荐好书 | 个性化推荐/相似推荐 | "给我推荐几本书" | `discover.md` |
-| 章节提取 | 提取单章完整 HTML/Markdown（通过 chrome-cdp 操控浏览器） | "帮我导出这章" | 见 `extract-chapter.mjs --help` |
-| 全书捕获 | 批量导出全书为 Markdown（通过 chrome-cdp 操控浏览器） | "帮我导出整本书" | 见 `capture-book.mjs --help` |
-| 章节目录 | 列出书籍完整章节目录 | "这本书有哪些章节" | 见 `list-chapters.mjs --help` |
-| 章节导航 | 跳转到指定章节 | "跳到第 5 章" | 见 `navigate-chapter.mjs --help` |
-| 大纲获取 | 获取 AI 章节要点摘要 | "这本书的大纲是什么" | 见 `outline.mjs --help` |
 
 根据用户意图参考对应说明文件了解接口参数、回包结构和工作流。
 
@@ -63,19 +58,19 @@ curl -X POST "https://i.weread.qq.com/api/agent/gateway" \
 **正确：业务参数平铺在 body 顶层。**
 
 ```json
-{"api_name":"/user/notebooks","count":100,"skill_version":"1.0.5"}
+{"api_name":"/user/notebooks","count":100,"skill_version":"1.0.3"}
 ```
 
 **正确：下一页继续平铺 `lastSort`。**
 
 ```json
-{"api_name":"/user/notebooks","count":100,"lastSort":1516907353,"skill_version":"1.0.5"}
+{"api_name":"/user/notebooks","count":100,"lastSort":1516907353,"skill_version":"1.0.3"}
 ```
 
 **错误：不要把业务参数包在 `params` 内。**
 
 ```json
-{"api_name":"/user/notebooks","params":{"count":100,"lastSort":1516907353},"skill_version":"1.0.5"}
+{"api_name":"/user/notebooks","params":{"count":100,"lastSort":1516907353},"skill_version":"1.0.3"}
 ```
 
 上面的错误写法会导致 `count`、`lastSort` 未被转发，后端按默认值返回第一页，看起来像分页失效。

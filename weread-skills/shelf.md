@@ -51,6 +51,7 @@
 | `archive[].name` | 书单名称 |
 | `archive[].bookIds` | 书单内的 bookId 列表 |
 | `bookCount` | 可枚举电子书数量，通常等于 `books[].length`；不含 `albums[]` 和 `mp` |
+| `userVid` | 用户 VID，用于构造深度链接 |
 
 ## 数量口径
 
