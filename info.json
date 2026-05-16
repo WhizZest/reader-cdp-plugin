@@ -1,5 +1,5 @@
 {
-  "description": "微信读书专用插件，提供章节提取、全书捕获、目录列表和章节导航功能",
+  "description": "微信读书专用插件，提供章节提取、全书捕获、目录列表、章节导航和大纲功能",
   "version": "2.0.0",
   "author": "WhizZest",
   "license": "MIT",
@@ -35,6 +35,11 @@
       "script": "navigate-chapter.mjs",
       "description": "通过chapterUid直接跳转到指定章节，使用wr_hash算法自动构造章节URL",
       "usage": "node navigate-chapter.mjs <target> <chapterUid> [--book-id <id>] [--verbose]"
+    },
+    {
+      "script": "outline.mjs",
+      "description": "获取微信读书AI生成的章节大纲（章节要点摘要），支持终端表格、JSON和Markdown三种输出格式",
+      "usage": "node outline.mjs <target> [--book-id <id>] [--chapter <uid>] [--output <file>] [--json] [--verbose]"
     }
   ]
 }
