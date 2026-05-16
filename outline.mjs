@@ -155,7 +155,7 @@ function main() {
     if (json) {
       const result = outlines.map(o => ({
         chapterUid: o.chapterUid,
-        title: chapterTitleMap.get(o.chapterUid) || '',
+        title: chapterTitleMap.get(o.chapterUid) || `章节 ${o.chapterUid}`,
         items: o.items
       }));
       console.log(JSON.stringify({ bookTitle, bookId, numericBookId, outlines: result }, null, 2));
