@@ -136,18 +136,53 @@ node navigate-chapter.mjs 483DB8D1 50
 node navigate-chapter.mjs 483DB8D1 50 --book-id b0132ec0813abb496g019430
 ```
 
-## 四种方案对比
+### outline - 大纲获取
 
-| 特性 | extract-chapter | capture-book | list-chapters | navigate-chapter |
-|------|----------------|--------------|---------------|------------------|
-| 数据来源 | 拦截页面 atob 调用 | 拦截页面 atob 调用 | CDP eval fetch | CDP nav |
-| 输出格式 | HTML / Markdown | Markdown | 表格 / JSON | 导航结果 |
-| 乱码情况 | 无乱码 | 无乱码 | N/A | N/A |
-| 捕获范围 | 单章节 | 全书 | 目录信息 | 单章跳转 |
-| 速度 | 快（重载一次页面） | 较慢（需逐章跳转） | 快（一次 fetch） | 快（一次导航） |
-| 保留格式 | 完整 HTML 结构 | 完整 Markdown（图片、代码块等） | N/A | N/A |
+获取微信读书 AI 生成的章节大纲（章节要点摘要）。
 
-四种命令互补使用：extract-chapter 适合快速提取单章，capture-book 适合批量获取全书，list-chapters 适合浏览目录，navigate-chapter 适合手动跳转章节。
+**功能特点**：
+- 通过 CDP eval 调用 outline API，利用浏览器已有登录态
+- 支持获取全部章节或指定章节的大纲
+- 支持终端表格、JSON 和 Markdown 三种输出格式
+- 大纲数据为层级结构，自动缩进显示
+
+**使用方法**：
+```bash
+node outline.mjs <target> [options]
+```
+
+**参数**：
+- `<target>`: Chrome DevTools Protocol 标签页ID（需在微信读书书籍页面运行）
+
+**选项**：
+- `-h, --help`: 显示详细用法
+- `--book-id <id>`: 书籍 ID，不提供则从当前页面 URL 自动提取
+- `--chapter <uid>`: 只获取指定章节的大纲（正整数，默认全部）
+- `--output <file>`: 导出为 Markdown 文件（与 --json 互斥）
+- `--json`: 输出 JSON 格式（与 --output 互斥）
+- `--verbose`: 显示详细输出
+
+**示例**：
+```bash
+node outline.mjs 483DB8D1
+node outline.mjs 483DB8D1 --book-id b0132ec0813abb496g019430
+node outline.mjs 483DB8D1 --chapter 5
+node outline.mjs 483DB8D1 --output ./outline.md
+node outline.mjs 483DB8D1 --json
+```
+
+## 五种方案对比
+
+| 特性 | extract-chapter | capture-book | list-chapters | navigate-chapter | outline |
+|------|----------------|--------------|---------------|------------------|---------|
+| 数据来源 | 拦截页面 atob 调用 | 拦截页面 atob 调用 | CDP eval fetch | CDP nav | CDP eval fetch |
+| 输出格式 | HTML / Markdown | Markdown | 表格 / JSON | 导航结果 | 表格 / JSON / Markdown |
+| 乱码情况 | 无乱码 | 无乱码 | N/A | N/A | N/A |
+| 捕获范围 | 单章节 | 全书 | 目录信息 | 单章跳转 | 大纲信息 |
+| 速度 | 快（重载一次页面） | 较慢（需逐章跳转） | 快（一次 fetch） | 快（一次导航） | 快（一次 POST） |
+| 保留格式 | 完整 HTML 结构 | 完整 Markdown（图片、代码块等） | N/A | N/A | N/A |
+
+五种命令互补使用：extract-chapter 适合快速提取单章，capture-book 适合批量获取全书，list-chapters 适合浏览目录，navigate-chapter 适合手动跳转章节，outline 适合获取 AI 生成的章节要点摘要。
 
 ## 查看插件信息
 
@@ -158,6 +193,7 @@ node extract-chapter.mjs --help
 node capture-book.mjs --help
 node list-chapters.mjs --help
 node navigate-chapter.mjs --help
+node outline.mjs --help
 ```
 
 ## 前置条件
@@ -230,6 +266,7 @@ node navigate-chapter.mjs --help
 - `capture-book.mjs`: 全书捕获脚本
 - `list-chapters.mjs`: 章节目录列表脚本
 - `navigate-chapter.mjs`: 章节导航脚本
+- `outline.mjs`: 大纲获取脚本
 - `lib/atob-extract.mjs`: atob Hook 和 CDP 工具函数
 - `lib/wr-hash.mjs`: wr_hash 算法和章节 URL 构造
 - `lib/book-info.mjs`: 书籍信息获取（bookId 提取、章节目录）
