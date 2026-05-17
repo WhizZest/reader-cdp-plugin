@@ -4,7 +4,10 @@
 
 ## 插件功能
 
-本插件提供以下功能：
+本插件提供两类能力：
+
+- **CDP 脚本**（浏览器操控）：章节提取、全书捕获、章节目录浏览、章节跳转、大纲获取等
+- **API 能力文档**（`weread-skills/`）：搜索书籍、管理书架、查看笔记划线、浏览书评、阅读统计、推荐等，详见 `weread-skills/SKILL.md`
 
 ### extract-chapter - 章节提取
 
@@ -270,6 +273,7 @@ node outline.mjs --help
 - `lib/atob-extract.mjs`: atob Hook 和 CDP 工具函数
 - `lib/wr-hash.mjs`: wr_hash 算法和章节 URL 构造
 - `lib/book-info.mjs`: 书籍信息获取（bookId 提取、章节目录）
+- `weread-skills/`: 微信读书 API 能力文档（搜索、书架、笔记、书评、阅读统计、推荐等）
 - `../plugin.mjs`: 插件管理工具
 - `../../cdp.mjs`: Chrome DevTools Protocol CLI工具
 
@@ -279,7 +283,7 @@ node outline.mjs --help
 2. 确保微信读书页面已加载章节内容（需要滚动页面触发加载）
 3. 如果提取失败，尝试刷新页面或重新加载章节
 4. 输出目录会自动创建，无需手动创建
-5. **新增脚本时，需要更新info.json文件**，在features数组中添加新脚本的元数据
+5. **新增功能时，需要更新 info.json**，在 features 数组中添加新入口的元数据（`entry` 字段指向脚本或文档，可选 `type` 声明类型：`"script"` 或 `"doc"`）
 
 ## 故障排除
 
